@@ -1,7 +1,6 @@
 ---
 name: skill-manager
-description: |
-  Manage locally installed skills for AI CLI clients (Claude Code, Gemini CLI, etc.).
+description: Manage locally installed skills for AI CLI clients (Claude Code, Gemini CLI, etc.).
   Start a web dashboard to view, search, inspect details, and uninstall skills.
   Use when user types "/show-skills" or asks to manage/view/list their installed skills.
   Works across different AI CLI clients by auto-detecting the skills directory.
