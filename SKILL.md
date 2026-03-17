@@ -1,6 +1,6 @@
 ---
 name: skill-manager
-description: Manage locally installed skills for AI CLI clients (Claude Code, Gemini CLI, etc.).
+description: Manage locally installed skills for AI CLI clients.
   Start a web dashboard to view, search, inspect details, and uninstall skills.
   Use when user types "/show-skills" or asks to manage/view/list their installed skills.
   Works across different AI CLI clients by auto-detecting the skills directory.
@@ -79,18 +79,29 @@ The server will:
 #### Option B: CLI Mode (Terminal)
 
 ```bash
-# Display skills directly in terminal without starting web server
+# Interactive CLI mode with menu
 python3 "$HOME/.claude/skills/skill-manager/scripts/server.py" "$SKILLS_DIR" "$CLI_CLIENT" --cli
 
 # Or use shorthand
 python3 "$HOME/.claude/skills/skill-manager/scripts/server.py" "$SKILLS_DIR" "$CLI_CLIENT" -l
+
+# Simple list mode (no interaction)
+python3 "$HOME/.claude/skills/skill-manager/scripts/server.py" "$SKILLS_DIR" "$CLI_CLIENT" -l -s
 ```
 
-CLI mode outputs a formatted table with:
+**Interactive CLI Mode** (默认):
+- 展示带编号的技能列表
+- 支持交互操作：
+  - 输入数字查看 skill 详情（描述、版本、来源、文件列表等）
+  - 输入 `s数字` 生成分享文本（如 `s1` 分享第1个 skill）
+  - 输入 `d数字` 卸载 skill（如 `d1` 卸载第1个 skill）
+  - 输入 `q` 退出
 
-- Skill name, version, source type, size, and description
-- Git repository details (URL, author, install date) for git-based skills
-- No browser required - perfect for SSH sessions or quick lookups
+**Simple Mode** (`-s` 或 `--simple`):
+- 仅输出格式化的技能表格
+- 无交互，适合脚本或快速查看
+
+CLI 模式无需浏览器，适合 SSH 会话或快速操作。
 
 ### Step 3: User Interaction
 

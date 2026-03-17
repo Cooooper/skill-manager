@@ -1889,8 +1889,161 @@ def format_size_cli(size_bytes):
         return f"{size_bytes / (1024 * 1024):.1f}MB"
 
 
+def print_skill_detail(skill):
+    """Print detailed information for a skill."""
+    print("\n" + "=" * 60)
+    print(f"📦 {skill.get('name', skill['id'])}")
+    print("=" * 60)
+
+    desc = skill.get('description', '暂无描述')
+    if desc:
+        print(f"\n📝 描述:\n   {desc}")
+
+    version = skill.get('version', 'N/A')
+    print(f"\n📌 版本: {version}")
+
+    print(f"📁 路径: {skill.get('path', 'N/A')}")
+    print(f"📊 大小: {format_size_cli(skill.get('size', 0))}")
+
+    if skill.get('has_scripts'):
+        print("📜 包含 scripts: 是")
+
+    # Source info
+    source = skill.get('source', {})
+    if source and source.get('type') != 'local':
+        print(f"\n🔗 来源: {source.get('type', 'unknown').upper()}")
+        url = source.get('url') or source.get('remote')
+        if url:
+            print(f"   URL: {url}")
+        if source.get('author'):
+            print(f"   作者: {source['author']}")
+        if source.get('install_date'):
+            print(f"   安装时间: {source['install_date']}")
+    else:
+        print(f"\n🔗 来源: Local (本地安装)")
+
+    # Files list
+    files = skill.get('files', [])
+    if files:
+        print(f"\n📂 文件列表 ({len(files)} 个):")
+        for f in files[:10]:  # Show first 10 files
+            print(f"   • {f.get('name', 'unknown')} ({format_size_cli(f.get('size', 0))})")
+        if len(files) > 10:
+            print(f"   ... 还有 {len(files) - 10} 个文件")
+
+    print("=" * 60)
+
+
+def generate_share_text(skill):
+    """Generate installation prompt for sharing."""
+    has_git_source = skill.get('source') and (skill.get('source', {}).get('url') or skill.get('source', {}).get('remote'))
+    is_local = not has_git_source or skill.get('source', {}).get('type') == 'local'
+
+    if is_local:
+        return f"我想安装 \"{skill.get('name', skill['id'])}\" 这个 skill，请帮我使用 find-skills 查找并安装。"
+    else:
+        repo_url = skill.get('source', {}).get('url') or skill.get('source', {}).get('remote')
+        skill_desc = skill.get('description', '一个实用的 AI CLI skill')
+        skill_id = skill.get('id', 'skill-name')
+
+        return f"""请帮我安装 "{skill.get('name', skill_id)}" 这个 skill。
+
+操作步骤：
+1. 从仓库 clone 到本地 skills 目录：
+   git clone {repo_url} ~/.claude/skills/{skill_id}
+
+或者使用 find-skills：
+我想安装 "{skill.get('name', skill_id)}" 这个 skill，请帮我使用 find-skills 查找并安装。"""
+
+
+def cli_interactive_menu(skills, cli_client, skills_dir):
+    """Interactive CLI menu for skill management."""
+    if not skills:
+        print("\n📦 No skills found.")
+        return
+
+    while True:
+        print(f"\n🎯 {cli_client} - Installed Skills ({len(skills)} total)\n")
+        print("-" * 70)
+        print(f"{'#':<4} {'Name':<22} {'Version':<10} {'Source':<10} {'Size':<8}")
+        print("-" * 70)
+
+        for idx, skill in enumerate(skills, 1):
+            name = skill.get('name', skill['id'])[:20]
+            version = (skill.get('version') or 'N/A')[:8]
+            source_type = (skill.get('source', {}).get('type') or 'local')[:8]
+            size = format_size_cli(skill.get('size', 0))
+            print(f"{idx:<4} {name:<22} {version:<10} {source_type:<10} {size:<8}")
+
+        print("-" * 70)
+        print("\n操作: [数字] 查看详情 | [s数字] 分享 | [d数字] 卸载 | [q] 退出")
+        print("示例: 1 (查看#1详情) | s1 (分享#1) | d1 (卸载#1)")
+
+        try:
+            choice = input("\n> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\nbye!")
+            break
+
+        if choice == 'q' or choice == 'quit':
+            print("\nbye!")
+            break
+
+        # Parse command
+        if choice.startswith('s'):  # Share
+            try:
+                idx = int(choice[1:]) - 1
+                if 0 <= idx < len(skills):
+                    skill = skills[idx]
+                    print(f"\n📤 分享 \"{skill.get('name', skill['id'])}\":")
+                    print("-" * 60)
+                    print(generate_share_text(skill))
+                    print("-" * 60)
+                    print("\n已复制到剪贴板 (或手动复制上述文本)")
+                else:
+                    print("❌ 无效的序号")
+            except ValueError:
+                print("❌ 无效输入")
+
+        elif choice.startswith('d'):  # Delete/Uninstall
+            try:
+                idx = int(choice[1:]) - 1
+                if 0 <= idx < len(skills):
+                    skill = skills[idx]
+                    print(f"\n⚠️  确认卸载 \"{skill.get('name', skill['id'])}\"?")
+                    confirm = input("输入 'yes' 确认卸载: ").strip().lower()
+                    if confirm == 'yes':
+                        skill_path = Path(skills_dir) / skill['id']
+                        if skill_path.exists():
+                            shutil.rmtree(skill_path)
+                            print(f"✅ \"{skill.get('name', skill['id'])}\" 已卸载")
+                            # Refresh skills list
+                            skills = [s for s in skills if s['id'] != skill['id']]
+                        else:
+                            print("❌ 目录不存在")
+                    else:
+                        print("已取消")
+                else:
+                    print("❌ 无效的序号")
+            except ValueError:
+                print("❌ 无效输入")
+
+        elif choice.isdigit():  # View detail
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(skills):
+                    print_skill_detail(skills[idx])
+                else:
+                    print("❌ 无效的序号")
+            except ValueError:
+                print("❌ 无效输入")
+
+        else:
+            print("❌ 无效命令")
+
+
 def print_skills_table(skills, cli_client):
-    """Print skills in a formatted table for CLI mode."""
+    """Legacy: Print skills in a simple table for CLI mode."""
     if not skills:
         print("\n📦 No skills found.")
         return
@@ -1930,6 +2083,7 @@ def print_skills_table(skills, cli_client):
 def main():
     # Check for CLI mode flags
     cli_mode = False
+    simple_mode = False
     args = sys.argv[1:]
 
     if '--cli' in args or '--list' in args or '-l' in args:
@@ -1937,10 +2091,15 @@ def main():
         # Remove the flag from args
         args = [a for a in args if a not in ('--cli', '--list', '-l')]
 
+    if '--simple' in args or '-s' in args:
+        simple_mode = True
+        args = [a for a in args if a not in ('--simple', '-s')]
+
     if len(args) < 1:
-        print("Usage: server.py <skills_dir> [cli_client] [--cli|--list|-l]")
+        print("Usage: server.py <skills_dir> [cli_client] [--cli|--list|-l] [--simple|-s]")
         print("\nOptions:")
         print("  --cli, --list, -l    Display skills in terminal (no web server)")
+        print("  --simple, -s         Simple list mode (no interaction)")
         sys.exit(1)
 
     skills_dir = args[0]
@@ -1956,8 +2115,12 @@ def main():
     skills = skill_manager.scan_skills()
 
     if cli_mode:
-        # CLI mode: print skills table and exit
-        print_skills_table(skills, cli_client)
+        if simple_mode:
+            # Simple CLI mode: print table and exit
+            print_skills_table(skills, cli_client)
+        else:
+            # Interactive CLI mode
+            cli_interactive_menu(skills, cli_client, skills_dir)
         sys.exit(0)
 
     # Web mode: start HTTP server
