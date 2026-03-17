@@ -1,9 +1,10 @@
 ---
 name: skill-manager
 description: Manage locally installed skills for AI CLI clients.
-  Start a web dashboard to view, search, inspect details, and uninstall skills.
+  Start a web dashboard to view, search, inspect details, sync between clients, and uninstall skills.
   Use when user types "/show-skills" or asks to manage/view/list their installed skills.
-  Works across different AI CLI clients by auto-detecting the skills directory.
+  Works across different AI CLI clients (Claude Code, Qoder, Gemini CLI, Aone Copilot) by auto-detecting installed tools.
+  Supports syncing skills between different AI CLI clients.
 allowed-tools:
   - Bash
   - Read
@@ -94,7 +95,9 @@ python3 "$HOME/.claude/skills/skill-manager/scripts/server.py" "$SKILLS_DIR" "$C
 - 支持交互操作：
   - 输入数字查看 skill 详情（描述、版本、来源、文件列表等）
   - 输入 `s数字` 生成分享文本（如 `s1` 分享第1个 skill）
+  - 输入 `y数字` 同步 skill 到其他 AI Client（如 `y1` 同步第1个 skill）
   - 输入 `d数字` 卸载 skill（如 `d1` 卸载第1个 skill）
+  - 输入 `a` 查看所有已安装的 AI Clients
   - 输入 `q` 退出
 
 **Simple Mode** (`-s` 或 `--simple`):
@@ -105,19 +108,63 @@ CLI 模式无需浏览器，适合 SSH 会话或快速操作。
 
 ### Step 3: User Interaction
 
+#### AI Client Detection
+
+The skill manager automatically detects all installed AI CLI clients on your system:
+
+| AI Client     | Config Directory     | Skills Directory        |
+| ------------- | -------------------- | ----------------------- |
+| **Claude Code** | `~/.claude/`        | `~/.claude/skills/`     |
+| **Qoder**       | `~/.qoder/`         | `~/.qoder/skills/`      |
+| **Gemini CLI**  | `~/.gemini/`        | `~/.gemini/skills/`     |
+| **Aone Copilot**| `~/.aone_copilot/`  | `~/.aone_copilot/skills/`|
+
+**API Endpoints:**
+- `GET /api/clients` - List all detected AI clients
+- `GET /api/sync/targets` - Get available sync targets (excludes current client)
+
+#### Skill Sync Feature
+
+Sync skills between different AI CLI clients:
+
+**Web Dashboard:**
+1. Click "同步" (Sync) button on any skill card
+2. Select target AI client from the list
+3. Click "开始同步" to sync the skill
+
+**CLI Mode:**
+```
+# View all detected AI clients
+> a
+
+# Sync skill #1 to another client
+> y1
+
+# Then select target from the list
+```
+
+**Sync Behavior:**
+- Copies entire skill directory including scripts
+- Preserves git history if available
+- Fails gracefully if skill already exists in target
+- Creates target skills directory if needed
+
 #### Web Dashboard Features
 
 The web dashboard provides:
 
-| Feature          | Description                                                     |
-| ---------------- | --------------------------------------------------------------- |
-| **Search**       | Filter skills by name or description                            |
-| **View Details** | Click any skill to see full SKILL.md content and file structure |
-| **Source Info**  | See where each skill was installed from (GitHub, GitLab, etc.)  |
-| **Share**        | Generate install prompts for sharing with AI CLI users          |
-| **Uninstall**    | Delete skills with confirmation dialog                          |
-| **Refresh**      | Rescan the skills directory for changes                         |
-| **Statistics**   | See total skill count and storage usage                         |
+| Feature            | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| **Search**         | Filter skills by name or description                            |
+| **View Details**   | Click any skill card to see full SKILL.md content and file structure |
+| **Source Info**    | See where each skill was installed from (GitHub, GitLab, etc.)  |
+| **Update**         | Pull latest code from GitHub/GitLab for git-based skills        |
+| **Share**          | Generate install prompts for sharing with AI CLI users          |
+| **Sync**           | Sync skills between different AI CLI clients                    |
+| **Uninstall**      | Delete skills with confirmation dialog                          |
+| **Refresh**        | Rescan the skills directory for changes                         |
+| **Statistics**     | See total skill count and storage usage                         |
+| **AI Clients**     | Detect and manage multiple installed AI CLI tools               |
 
 ## Dashboard Features
 
@@ -194,13 +241,43 @@ export SKILL_MANAGER_PORT=8080
 
 This skill manager works with any AI CLI that stores skills in a directory structure:
 
-| CLI Client  | Skills Directory    |
-| ----------- | ------------------- |
-| Claude Code | `~/.claude/skills/` |
-| Gemini CLI  | `~/.gemini/skills/` |
-| Custom      | Configurable        |
+| CLI Client     | Config Directory      | Skills Directory           |
+| -------------- | --------------------- | -------------------------- |
+| Claude Code    | `~/.claude/`          | `~/.claude/skills/`        |
+| Qoder          | `~/.qoder/`           | `~/.qoder/skills/`         |
+| Gemini CLI     | `~/.gemini/`          | `~/.gemini/skills/`        |
+| Aone Copilot   | `~/.aone_copilot/`    | `~/.aone_copilot/skills/`  |
+| Custom         | Configurable          | Configurable               |
 
-The skill auto-detects the CLI based on which directory exists.
+The skill manager auto-detects all installed AI CLI clients and displays the current one in the dashboard.
+
+### Skill Sync Between Clients
+
+You can sync skills between different AI CLI clients:
+
+1. **From Web Dashboard:** Click the "同步" button on any skill card
+2. **From CLI Mode:** Use command `y{number}` (e.g., `y1` to sync skill #1)
+
+Requirements for sync:
+- Both source and target AI CLI must be installed
+- Target skills directory will be created if it doesn't exist
+- Skips if skill already exists in target to prevent overwrites
+
+### Skill Update (Git Pull)
+
+For skills installed from GitHub or GitLab, you can update them to the latest version:
+
+1. **From Web Dashboard:** Click the "更新" button on GitHub/GitLab sourced skills
+2. **Requirements:**
+   - Skill must be installed from GitHub or GitLab
+   - No uncommitted local changes
+   - Must be a valid git repository with remote access
+
+**Update Behavior:**
+- Fetches latest changes from remote
+- Performs hard reset to match remote branch
+- Returns success message with old/new commit hashes
+- Shows "already up to date" if no changes needed
 
 ## Technical Details
 
@@ -213,12 +290,16 @@ The skill auto-detects the CLI based on which directory exists.
 
 ### API Endpoints
 
-| Endpoint          | Method | Description                   |
-| ----------------- | ------ | ----------------------------- |
-| `/`               | GET    | Serve dashboard HTML          |
-| `/api/skills`     | GET    | List all skills with metadata |
-| `/api/skills/:id` | GET    | Get detailed skill info       |
-| `/api/skills/:id` | DELETE | Uninstall a skill             |
+| Endpoint                    | Method | Description                   |
+| --------------------------- | ------ | ----------------------------- |
+| `/`                         | GET    | Serve dashboard HTML          |
+| `/api/skills`               | GET    | List all skills with metadata |
+| `/api/skills/:id`           | GET    | Get detailed skill info       |
+| `/api/skills/:id`           | DELETE | Uninstall a skill             |
+| `/api/skills/:id/sync`      | POST   | Sync skill to another client  |
+| `/api/skills/:id/update`    | POST   | Update skill from git remote  |
+| `/api/clients`              | GET    | List all detected AI clients  |
+| `/api/sync/targets`         | GET    | Get available sync targets    |
 
 ### Skill Metadata Parsing
 

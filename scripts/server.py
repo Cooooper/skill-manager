@@ -20,6 +20,37 @@ from threading import Timer
 DEFAULT_PORT = 8765
 MAX_PORT_ATTEMPTS = 10
 
+# Supported AI Clients and their skills directories
+AI_CLIENTS = {
+    "claude": {"name": "Claude Code", "skills_dir": ".claude/skills", "config_dir": ".claude"},
+    "qoder": {"name": "Qoder", "skills_dir": ".qoder/skills", "config_dir": ".qoder"},
+    "gemini": {"name": "Gemini CLI", "skills_dir": ".gemini/skills", "config_dir": ".gemini"},
+    "aone_copilot": {"name": "Aone Copilot", "skills_dir": ".aone_copilot/skills", "config_dir": ".aone_copilot"},
+}
+
+
+def detect_ai_clients():
+    """Detect all installed AI clients on the system."""
+    home = Path.home()
+    detected = []
+
+    for client_id, config in AI_CLIENTS.items():
+        config_path = home / config["config_dir"]
+        skills_path = home / config["skills_dir"]
+
+        # Check if config directory exists (indicates installation)
+        if config_path.exists():
+            detected.append({
+                "id": client_id,
+                "name": config["name"],
+                "skills_dir": str(skills_path),
+                "config_dir": str(config_path),
+                "has_skills": skills_path.exists() and skills_path.is_dir(),
+                "skill_count": len([d for d in skills_path.iterdir() if d.is_dir() and (d / "SKILL.md").exists()]) if skills_path.exists() else 0
+            })
+
+    return detected
+
 
 class SkillManager:
     def __init__(self, skills_dir: str, cli_client: str):
@@ -272,6 +303,174 @@ class SkillManager:
             print(f"Error deleting skill: {e}")
             return False
 
+    def sync_skill_to_client(self, skill_id: str, target_client_id: str) -> dict:
+        """Sync a skill to another AI client."""
+        # Find the skill
+        skill = None
+        for s in self.skills:
+            if s["id"] == skill_id:
+                skill = s
+                break
+
+        if not skill:
+            return {"success": False, "error": "Skill not found"}
+
+        # Get target client info
+        if target_client_id not in AI_CLIENTS:
+            return {"success": False, "error": f"Unknown AI client: {target_client_id}"}
+
+        target_config = AI_CLIENTS[target_client_id]
+        home = Path.home()
+        target_skills_dir = home / target_config["skills_dir"]
+
+        # Check if target directory exists, create if needed
+        if not target_skills_dir.exists():
+            try:
+                target_skills_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                return {"success": False, "error": f"Failed to create target directory: {e}"}
+
+        # Source and target paths
+        source_path = Path(skill["path"])
+        target_skill_path = target_skills_dir / skill["id"]
+
+        # Check if already exists
+        if target_skill_path.exists():
+            return {"success": False, "error": f"Skill '{skill['id']}' already exists in {target_config['name']}"}
+
+        try:
+            # Copy the entire skill directory
+            shutil.copytree(source_path, target_skill_path)
+
+            # Copy git history if it's a git repo
+            source_git = source_path / ".git"
+            if source_git.exists():
+                target_git = target_skill_path / ".git"
+                if target_git.exists():
+                    shutil.rmtree(target_git)
+                shutil.copytree(source_git, target_git)
+
+            return {
+                "success": True,
+                "message": f"Successfully synced '{skill['name']}' to {target_config['name']}",
+                "target_path": str(target_skill_path)
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Failed to sync skill: {e}"}
+
+    def update_skill(self, skill_id: str) -> dict:
+        """Update a skill by pulling latest code from git remote."""
+        # Find the skill
+        skill = None
+        for s in self.skills:
+            if s["id"] == skill_id:
+                skill = s
+                break
+
+        if not skill:
+            return {"success": False, "error": "Skill not found"}
+
+        source_type = skill.get("source", {}).get("type")
+        if source_type not in ("github", "gitlab"):
+            return {"success": False, "error": f"Skill source type '{source_type}' does not support update"}
+
+        skill_path = Path(skill["path"])
+        git_dir = skill_path / ".git"
+
+        if not git_dir.exists():
+            return {"success": False, "error": "Not a git repository"}
+
+        try:
+            # Check if there are uncommitted changes
+            result = subprocess.run(
+                ["git", "-C", str(skill_path), "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.stdout.strip():
+                return {"success": False, "error": "Skill has uncommitted changes. Please commit or discard changes before updating."}
+
+            # Get current commit hash for comparison
+            result = subprocess.run(
+                ["git", "-C", str(skill_path), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            old_commit = result.stdout.strip() if result.returncode == 0 else None
+
+            # Fetch latest changes from remote
+            result = subprocess.run(
+                ["git", "-C", str(skill_path), "fetch", "origin"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                return {"success": False, "error": f"Failed to fetch from remote: {result.stderr}"}
+
+            # Get default branch (usually main or master)
+            result = subprocess.run(
+                ["git", "-C", str(skill_path), "rev-parse", "--abbrev-ref", "origin/HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                # Fallback to main/master
+                result = subprocess.run(
+                    ["git", "-C", str(skill_path), "rev-parse", "--verify", "origin/main"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    default_branch = "origin/main"
+                else:
+                    default_branch = "origin/master"
+            else:
+                default_branch = result.stdout.strip()
+
+            # Pull latest changes
+            result = subprocess.run(
+                ["git", "-C", str(skill_path), "reset", "--hard", default_branch],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                return {"success": False, "error": f"Failed to update: {result.stderr}"}
+
+            # Get new commit hash
+            result = subprocess.run(
+                ["git", "-C", str(skill_path), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            new_commit = result.stdout.strip() if result.returncode == 0 else None
+
+            # Check if actually updated
+            if old_commit == new_commit:
+                return {
+                    "success": True,
+                    "message": f"'{skill['name']}' is already up to date",
+                    "commit": new_commit[:8] if new_commit else None
+                }
+
+            return {
+                "success": True,
+                "message": f"Successfully updated '{skill['name']}'",
+                "old_commit": old_commit[:8] if old_commit else None,
+                "new_commit": new_commit[:8] if new_commit else None
+            }
+
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "Update operation timed out"}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to update skill: {e}"}
+
 
 class RequestHandler(BaseHTTPRequestHandler):
     skill_manager = None
@@ -309,6 +508,24 @@ class RequestHandler(BaseHTTPRequestHandler):
                 {"skills": skills, "cli_client": self.skill_manager.cli_client}
             )
 
+        elif path == "/api/clients":
+            # Return all detected AI clients
+            clients = detect_ai_clients()
+            self._send_json({"clients": clients})
+
+        elif path == "/api/sync/targets":
+            # Return potential sync targets (clients that have skills dir)
+            clients = detect_ai_clients()
+            current_client = None
+            # Determine current client based on skills_dir
+            for client in clients:
+                if client["skills_dir"] == str(self.skill_manager.skills_dir):
+                    current_client = client["id"]
+                    break
+            # Filter out current client
+            targets = [c for c in clients if c["id"] != current_client]
+            self._send_json({"targets": targets, "current": current_client})
+
         elif path.startswith("/api/skills/"):
             skill_id = path.split("/")[-1]
             detail = self.skill_manager.get_skill_detail(skill_id)
@@ -334,11 +551,58 @@ class RequestHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "Not found"}, 404)
 
+    def do_POST(self):
+        """Handle POST requests."""
+        parsed_path = urllib.parse.urlparse(self.path)
+        path = parsed_path.path
+
+        # Read request body
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self._send_json({"error": "Invalid JSON"}, 400)
+            return
+
+        if path.startswith("/api/skills/") and path.endswith("/sync"):
+            # Handle sync request: /api/skills/{skill_id}/sync
+            parts = path.split("/")
+            if len(parts) >= 5:
+                skill_id = parts[3]
+                target_client = data.get("target_client")
+                if not target_client:
+                    self._send_json({"error": "Missing target_client"}, 400)
+                    return
+
+                result = self.skill_manager.sync_skill_to_client(skill_id, target_client)
+                if result.get("success"):
+                    self._send_json(result)
+                else:
+                    self._send_json(result, 400)
+            else:
+                self._send_json({"error": "Invalid path"}, 400)
+        elif path.startswith("/api/skills/") and path.endswith("/update"):
+            # Handle update request: /api/skills/{skill_id}/update
+            parts = path.split("/")
+            if len(parts) >= 5:
+                skill_id = parts[3]
+                result = self.skill_manager.update_skill(skill_id)
+                if result.get("success"):
+                    self._send_json(result)
+                else:
+                    self._send_json(result, 400)
+            else:
+                self._send_json({"error": "Invalid path"}, 400)
+        else:
+            self._send_json({"error": "Not found"}, 404)
+
     def do_OPTIONS(self):
         """Handle OPTIONS requests for CORS."""
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -763,6 +1027,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             align-items: flex-start;
             gap: 12px;
             margin-bottom: 12px;
+            position: relative;
         }
 
         .skill-icon {
@@ -780,6 +1045,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .skill-title-wrap {
             flex: 1;
             min-width: 0;
+            padding-right: 50px;
         }
 
         .skill-name {
@@ -793,12 +1059,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         .skill-version {
-            font-size: 12px;
+            position: absolute;
+            top: 0;
+            right: 0;
+            font-size: 11px;
             color: var(--text-tertiary);
-            background: #f5f5f5;
+            background: #f0f0f0;
             padding: 2px 8px;
             border-radius: 4px;
-            display: inline-block;
+            font-weight: 500;
+        }
+
+        .skill-size {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
 
         .skill-description {
@@ -966,7 +1243,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .modal {
             background: white;
             border-radius: 16px;
-            max-width: 720px;
+            max-width: 960px;
             width: 100%;
             max-height: 90vh;
             overflow: hidden;
@@ -1044,6 +1321,124 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 10px;
             font-size: 14px;
             color: var(--text-secondary);
+        }
+
+        /* Detail Layout - Two Column */
+        .detail-layout {
+            display: flex;
+            gap: 24px;
+            height: 100%;
+        }
+
+        .detail-sidebar {
+            width: 280px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .detail-main {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+        }
+
+        .detail-main::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .detail-main::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        .detail-main::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 3px;
+        }
+
+        .file-tree {
+            background: var(--bg-body);
+            border-radius: 10px;
+            padding: 16px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .file-tree-header {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-tertiary);
+            margin-bottom: 12px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .file-tree-list {
+            list-style: none;
+        }
+
+        .file-tree-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 13px;
+        }
+
+        .file-tree-item:last-child {
+            border-bottom: none;
+        }
+
+        .file-tree-path {
+            color: var(--text-secondary);
+            word-break: break-all;
+            padding-right: 8px;
+        }
+
+        .file-tree-size {
+            color: var(--text-tertiary);
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+
+        .skill-meta-card {
+            background: var(--bg-body);
+            border-radius: 10px;
+            padding: 16px;
+        }
+
+        .skill-meta-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 14px;
+        }
+
+        .skill-meta-item:last-child {
+            border-bottom: none;
+        }
+
+        .skill-meta-label {
+            color: var(--text-tertiary);
+        }
+
+        .skill-meta-value {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        @media (max-width: 768px) {
+            .detail-layout {
+                flex-direction: column;
+            }
+
+            .detail-sidebar {
+                width: 100%;
+            }
         }
 
         .code-block {
@@ -1287,6 +1682,81 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 4px;
         }
 
+        .btn-sync {
+            background: #8b5cf6 !important;
+            color: white !important;
+        }
+
+        .btn-sync:hover {
+            background: #7c3aed !important;
+        }
+
+        .btn-update {
+            background: #10b981 !important;
+            color: white !important;
+        }
+
+        .btn-update:hover {
+            background: #059669 !important;
+        }
+
+        .sync-modal-content {
+            max-width: 400px;
+        }
+
+        .sync-clients-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .sync-client-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .sync-client-item:hover {
+            border-color: var(--primary);
+            background: var(--primary-light);
+        }
+
+        .sync-client-item.selected {
+            border-color: #8b5cf6;
+            background: #f5f3ff;
+        }
+
+        .sync-client-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            margin-right: 12px;
+            background: #f3f4f6;
+        }
+
+        .sync-client-info {
+            flex: 1;
+        }
+
+        .sync-client-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .sync-client-meta {
+            font-size: 0.85rem;
+            color: var(--text-tertiary);
+        }
+
     </style>
 </head>
 <body>
@@ -1364,6 +1834,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
                 <button class="btn btn-share" onclick="shareCurrentSkill()">🔗 分享</button>
+                <button class="btn btn-sync" onclick="syncCurrentSkill()">🔄 同步</button>
                 <button class="btn btn-danger" onclick="confirmDelete()">🗑️ 卸载</button>
             </div>
         </div>
@@ -1421,6 +1892,52 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
             <div class="modal-footer" style="justify-content: center;">
                 <button class="btn btn-secondary" onclick="closeShareModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sync Modal -->
+    <div class="modal-overlay" id="syncModal">
+        <div class="modal sync-modal-content">
+            <div class="modal-header">
+                <div class="modal-title">🔄 同步 Skill</div>
+                <button class="modal-close" onclick="closeSyncModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="share-modal-content">
+                    <p style="color: #6b7280; margin-bottom: 16px;">将 "<strong id="syncSkillName"></strong>" 同步到其他 AI Client</p>
+
+                    <div id="syncLoadingBox" style="text-align: center; padding: 40px;">
+                        <div class="loading" style="width: 40px; height: 40px; margin: 0 auto 16px;"></div>
+                        <p style="color: #6b7280;">正在检测已安装的 AI Client...</p>
+                    </div>
+
+                    <div id="syncClientsBox" style="display: none;">
+                        <p style="color: #374151; font-size: 0.9rem; margin-bottom: 12px; text-align: left;">
+                            选择目标 AI Client：
+                        </p>
+                        <div class="sync-clients-list" id="syncClientsList">
+                            <!-- Dynamic content -->
+                        </div>
+                        <div id="syncErrorBox" style="display: none; color: #ef4444; font-size: 0.9rem; margin-top: 12px; text-align: center;"></div>
+                    </div>
+
+                    <div id="noSyncTargetsBox" style="display: none; padding: 20px; text-align: center;">
+                        <p style="color: #9ca3af; font-size: 0.95rem;">
+                            未检测到其他已安装的 AI Client。<br>
+                            支持的客户端：Claude Code、Qoder、Gemini CLI、Aone Copilot
+                        </p>
+                    </div>
+
+                    <div id="syncSuccessBox" style="display: none; text-align: center; padding: 20px;">
+                        <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
+                        <p id="syncSuccessMessage" style="color: #059669; font-weight: 600;"></p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: center;" id="syncFooter">
+                <button class="btn btn-secondary" onclick="closeSyncModal()">关闭</button>
+                <button class="btn btn-sync" id="syncConfirmBtn" onclick="executeSync()" disabled>🔄 开始同步</button>
             </div>
         </div>
     </div>
@@ -1537,28 +2054,32 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
-            grid.innerHTML = skills.map(skill => `
+            grid.innerHTML = skills.map(skill => {
+                const sourceType = skill.source?.type || 'local';
+                const canUpdate = sourceType === 'github' || sourceType === 'gitlab';
+                return `
                 <div class="skill-card" onclick="showDetail('${skill.id}')">
                     <div class="skill-card-header">
                         <div class="skill-icon">${getSkillEmoji(skill.id)}</div>
                         <div class="skill-title-wrap">
                             <div class="skill-name">${escapeHtml(skill.name)}</div>
-                            <span class="skill-version">${escapeHtml(skill.version || 'N/A')}</span>
+                            <span class="skill-size">📦 ${formatSize(skill.size || 0)}</span>
                         </div>
+                        <span class="skill-version">${escapeHtml(skill.version || 'N/A')}</span>
                     </div>
                     <div class="skill-description">${escapeHtml(skill.description || '暂无描述')}</div>
                     <div class="skill-footer">
                         <div class="skill-source">
-                            ${getSourceIcon(skill.source)} ${skill.source?.type || 'local'}
+                            ${getSourceIcon(skill.source)} ${sourceType}
                         </div>
                         <div class="skill-actions" onclick="event.stopPropagation()">
-                            <button class="btn btn-secondary" onclick="showDetail('${skill.id}')">详情</button>
+                            ${canUpdate ? `<button class="btn btn-update" onclick="updateSkill('${skill.id}')">更新</button>` : ''}
                             <button class="btn btn-share" onclick="showShareModal('${skill.id}')">分享</button>
-                            <button class="btn btn-danger" onclick="promptDelete('${skill.id}', '${escapeHtml(skill.name)}')">卸载</button>
+                            <button class="btn btn-sync" onclick="showSyncModal('${skill.id}')">同步</button>
                         </div>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         function filterSkills(query, filterType = 'all') {
@@ -1595,42 +2116,70 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const detail = await response.json();
 
                 document.getElementById('detailTitle').textContent = '📦 ' + currentSkill.name;
+
+                const sourceType = currentSkill.source?.type || 'local';
+                const canUpdate = sourceType === 'github' || sourceType === 'gitlab';
+
                 document.getElementById('detailBody').innerHTML = `
-                    <div class="detail-section">
-                        <h3>描述</h3>
-                        <div class="detail-content">${escapeHtml(currentSkill.description || '暂无描述')}</div>
-                    </div>
-                    <div class="detail-section">
-                        <h3>版本</h3>
-                        <div class="detail-content">${escapeHtml(currentSkill.version || 'N/A')}</div>
-                    </div>
-                    <div class="detail-section">
-                        <h3>来源</h3>
-                        <div class="detail-content">
-                            ${renderSourceDetail(currentSkill.source)}
+                    <div class="detail-layout">
+                        <!-- Left Sidebar: File Tree & Meta -->
+                        <div class="detail-sidebar">
+                            <div class="file-tree">
+                                <div class="file-tree-header">📂 文件 (${detail.file_count || 0})</div>
+                                <ul class="file-tree-list">
+                                    ${(detail.files || []).map(f => `
+                                        <li class="file-tree-item">
+                                            <span class="file-tree-path">${escapeHtml(f.path)}</span>
+                                            <span class="file-tree-size">${formatSize(f.size)}</span>
+                                        </li>
+                                    `).join('')}
+                                </ul>
+                            </div>
+                            <div class="skill-meta-card">
+                                <div class="skill-meta-item">
+                                    <span class="skill-meta-label">版本</span>
+                                    <span class="skill-meta-value">${escapeHtml(currentSkill.version || 'N/A')}</span>
+                                </div>
+                                <div class="skill-meta-item">
+                                    <span class="skill-meta-label">来源</span>
+                                    <span class="skill-meta-value">${sourceType}</span>
+                                </div>
+                                <div class="skill-meta-item">
+                                    <span class="skill-meta-label">大小</span>
+                                    <span class="skill-meta-value">${formatSize(currentSkill.size || 0)}</span>
+                                </div>
+                                ${currentSkill.source?.author ? `
+                                <div class="skill-meta-item">
+                                    <span class="skill-meta-label">作者</span>
+                                    <span class="skill-meta-value">${escapeHtml(currentSkill.source.author)}</span>
+                                </div>
+                                ` : ''}
+                            </div>
                         </div>
-                    </div>
-                    <div class="detail-section">
-                        <h3>位置</h3>
-                        <div class="detail-content" style="font-family: monospace; font-size: 13px;">${escapeHtml(currentSkill.path)}</div>
-                    </div>
-                    <div class="detail-section">
-                        <h3>文件 (${detail.file_count || 0})</h3>
-                        <div class="detail-content">
-                            <ul class="file-list">
-                                ${(detail.files || []).slice(0, 20).map(f => `
-                                    <li>
-                                        <span>${escapeHtml(f.path)}</span>
-                                        <span class="file-size">${formatSize(f.size)}</span>
-                                    </li>
-                                `).join('')}
-                                ${(detail.files || []).length > 20 ? `<li style="color: #9ca3af; text-align: center;">... 还有 ${detail.files.length - 20} 个文件</li>` : ''}
-                            </ul>
+
+                        <!-- Right Main: Description & Content -->
+                        <div class="detail-main">
+                            <div class="detail-section">
+                                <h3>📝 描述</h3>
+                                <div class="detail-content">${escapeHtml(currentSkill.description || '暂无描述')}</div>
+                            </div>
+                            ${currentSkill.source?.url ? `
+                            <div class="detail-section">
+                                <h3>🔗 来源链接</h3>
+                                <div class="detail-content" style="font-family: monospace; font-size: 13px;">
+                                    <a href="${escapeHtml(currentSkill.source.url)}" target="_blank" style="color: var(--primary);">${escapeHtml(currentSkill.source.url)}</a>
+                                </div>
+                            </div>
+                            ` : ''}
+                            <div class="detail-section">
+                                <h3>📍 本地路径</h3>
+                                <div class="detail-content" style="font-family: monospace; font-size: 13px;">${escapeHtml(currentSkill.path)}</div>
+                            </div>
+                            <div class="detail-section">
+                                <h3>📄 SKILL.md</h3>
+                                <div class="code-block">${escapeHtml(detail.content || 'No content')}</div>
+                            </div>
                         </div>
-                    </div>
-                    <div class="detail-section">
-                        <h3>SKILL.md 内容</h3>
-                        <div class="code-block">${escapeHtml(detail.content || 'No content')}</div>
                     </div>
                 `;
 
@@ -1846,6 +2395,187 @@ Skill 简介：${skillDesc}`;
             });
         }
 
+        // Sync functionality
+        let skillToSync = null;
+        let selectedSyncTarget = null;
+        let availableSyncTargets = [];
+
+        const clientIcons = {
+            'claude': '🤖',
+            'qoder': '🚀',
+            'gemini': '♊',
+            'aone_copilot': '👥'
+        };
+
+        async function showSyncModal(skillId) {
+            skillToSync = allSkills.find(s => s.id === skillId);
+            if (!skillToSync) return;
+
+            document.getElementById('syncSkillName').textContent = skillToSync.name;
+            document.getElementById('syncModal').classList.add('active');
+
+            // Reset state
+            selectedSyncTarget = null;
+            availableSyncTargets = [];
+            document.getElementById('syncConfirmBtn').disabled = true;
+            document.getElementById('syncErrorBox').style.display = 'none';
+            document.getElementById('syncErrorBox').textContent = '';
+
+            // Show loading
+            document.getElementById('syncLoadingBox').style.display = 'block';
+            document.getElementById('syncClientsBox').style.display = 'none';
+            document.getElementById('noSyncTargetsBox').style.display = 'none';
+            document.getElementById('syncSuccessBox').style.display = 'none';
+            document.getElementById('syncFooter').style.display = 'flex';
+
+            try {
+                const response = await fetch('/api/sync/targets');
+                const data = await response.json();
+
+                availableSyncTargets = data.targets || [];
+
+                document.getElementById('syncLoadingBox').style.display = 'none';
+
+                if (availableSyncTargets.length === 0) {
+                    document.getElementById('noSyncTargetsBox').style.display = 'block';
+                    document.getElementById('syncFooter').style.display = 'none';
+                } else {
+                    renderSyncTargets(availableSyncTargets);
+                    document.getElementById('syncClientsBox').style.display = 'block';
+                }
+            } catch (error) {
+                document.getElementById('syncLoadingBox').style.display = 'none';
+                document.getElementById('noSyncTargetsBox').style.display = 'block';
+                document.getElementById('noSyncTargetsBox').innerHTML = '<p style="color: #ef4444;">加载失败，请重试</p>';
+            }
+        }
+
+        function renderSyncTargets(targets) {
+            const container = document.getElementById('syncClientsList');
+            container.innerHTML = targets.map(target => `
+                <div class="sync-client-item" data-client-id="${target.id}" onclick="selectSyncTarget('${target.id}')">
+                    <div class="sync-client-icon">${clientIcons[target.id] || '🤖'}</div>
+                    <div class="sync-client-info">
+                        <div class="sync-client-name">${escapeHtml(target.name)}</div>
+                        <div class="sync-client-meta">${target.skill_count} 个 skills</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function selectSyncTarget(clientId) {
+            selectedSyncTarget = clientId;
+
+            // Update UI
+            document.querySelectorAll('.sync-client-item').forEach(item => {
+                if (item.dataset.clientId === clientId) {
+                    item.classList.add('selected');
+                } else {
+                    item.classList.remove('selected');
+                }
+            });
+
+            document.getElementById('syncConfirmBtn').disabled = false;
+            document.getElementById('syncErrorBox').style.display = 'none';
+        }
+
+        async function executeSync() {
+            if (!skillToSync || !selectedSyncTarget) return;
+
+            const btn = document.getElementById('syncConfirmBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 同步中...';
+
+            try {
+                const response = await fetch(`/api/skills/${skillToSync.id}/sync`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ target_client: selectedSyncTarget })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    document.getElementById('syncClientsBox').style.display = 'none';
+                    document.getElementById('syncSuccessBox').style.display = 'block';
+                    document.getElementById('syncSuccessMessage').textContent = result.message;
+                    document.getElementById('syncFooter').innerHTML = `
+                        <button class="btn btn-secondary" onclick="closeSyncModal()">关闭</button>
+                    `;
+                    showToast(result.message, 'success');
+                } else {
+                    btn.disabled = false;
+                    btn.innerHTML = '🔄 开始同步';
+                    document.getElementById('syncErrorBox').textContent = result.error || '同步失败';
+                    document.getElementById('syncErrorBox').style.display = 'block';
+                }
+            } catch (error) {
+                btn.disabled = false;
+                btn.innerHTML = '🔄 开始同步';
+                document.getElementById('syncErrorBox').textContent = '同步失败，请重试';
+                document.getElementById('syncErrorBox').style.display = 'block';
+            }
+        }
+
+        function closeSyncModal() {
+            document.getElementById('syncModal').classList.remove('active');
+            skillToSync = null;
+            selectedSyncTarget = null;
+            availableSyncTargets = [];
+
+            // Reset button state
+            const btn = document.getElementById('syncConfirmBtn');
+            btn.disabled = true;
+            btn.innerHTML = '🔄 开始同步';
+        }
+
+        function syncCurrentSkill() {
+            if (currentSkill) {
+                showSyncModal(currentSkill.id);
+            }
+        }
+
+        async function updateSkill(skillId) {
+            const skill = allSkills.find(s => s.id === skillId);
+            if (!skill) return;
+
+            const sourceType = skill.source?.type;
+            if (sourceType !== 'github' && sourceType !== 'gitlab') {
+                showToast('只有 GitHub/GitLab 来源的 skill 支持更新', 'error');
+                return;
+            }
+
+            if (!confirm(`确定要更新 "${skill.name}" 吗？\n将从 ${sourceType} 拉取最新代码。`)) {
+                return;
+            }
+
+            try {
+                showToast(`正在更新 ${skill.name}...`, 'success');
+
+                const response = await fetch(`/api/skills/${skillId}/update`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast(result.message, 'success');
+                    // Refresh the list
+                    refreshSkills();
+                } else {
+                    showToast(result.error || '更新失败', 'error');
+                }
+            } catch (error) {
+                showToast('更新失败，请重试', 'error');
+                console.error(error);
+            }
+        }
+
         // Close modals on overlay click
         document.querySelectorAll('.modal-overlay').forEach(overlay => {
             overlay.addEventListener('click', (e) => {
@@ -1861,6 +2591,7 @@ Skill 简介：${skillDesc}`;
                 closeModal();
                 closeConfirmModal();
                 closeShareModal();
+                closeSyncModal();
             }
         });
     </script>
@@ -1993,8 +2724,8 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
             print(f"{idx:<4} {name:<22} {version:<10} {source_type:<10} {size:<8}")
 
         print("-" * 70)
-        print("\n操作: [数字] 查看详情 | [s数字] 分享 | [d数字] 卸载 | [q] 退出")
-        print("示例: 1 (查看#1详情) | s1 (分享#1) | d1 (卸载#1)")
+        print("\n操作: [数字] 查看详情 | [s数字] 分享 | [y数字] 同步 | [d数字] 卸载 | [a] AI Clients | [q] 退出")
+        print("示例: 1 (查看#1详情) | s1 (分享#1) | y1 (同步#1) | d1 (卸载#1) | a (查看AI Clients)")
 
         try:
             choice = input("\n> ").strip().lower()
@@ -2050,6 +2781,76 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
                 idx = int(choice) - 1
                 if 0 <= idx < len(skills):
                     print_skill_detail(skills[idx])
+                else:
+                    print("❌ 无效的序号")
+            except ValueError:
+                print("❌ 无效输入")
+
+        elif choice == 'a':  # Show AI Clients
+            print("\n🤖 已安装的 AI Clients:")
+            print("-" * 60)
+            clients = detect_ai_clients()
+            current_client_name = None
+
+            # Find current client name
+            for client in clients:
+                if client['skills_dir'] == str(skills_dir):
+                    current_client_name = client['name']
+                    break
+
+            for client in clients:
+                is_current = client['skills_dir'] == str(skills_dir)
+                marker = " 👈 当前" if is_current else ""
+                print(f"  {client['id']}: {client['name']}")
+                print(f"     路径: {client['skills_dir']}")
+                print(f"     Skills: {client['skill_count']} 个{marker}")
+                print()
+
+            if len(clients) <= 1:
+                print("💡 只检测到一个 AI Client，无法使用同步功能")
+                print("   支持的客户端: Claude Code、Qoder、Gemini CLI、Aone Copilot")
+            else:
+                print(f"💡 使用 'y数字' 命令将 skill 同步到其他 AI Client")
+
+        elif choice.startswith('y'):  # Sync (y = sync)
+            try:
+                idx = int(choice[1:]) - 1
+                if 0 <= idx < len(skills):
+                    skill = skills[idx]
+                    skill_id = skill['id']
+
+                    # Detect available sync targets
+                    clients = detect_ai_clients()
+                    targets = [c for c in clients if c['skills_dir'] != str(skills_dir)]
+
+                    if not targets:
+                        print("❌ 未检测到其他已安装的 AI Client")
+                        print("   支持的客户端: Claude Code、Qoder、Gemini CLI、Aone Copilot")
+                        continue
+
+                    print(f"\n🔄 同步 \"{skill.get('name', skill_id)}\" 到:")
+                    print("-" * 60)
+                    for i, target in enumerate(targets, 1):
+                        print(f"  {i}. {target['name']} ({target['skill_count']} skills)")
+                        print(f"     路径: {target['skills_dir']}")
+                    print()
+
+                    try:
+                        target_idx = int(input("选择目标 (输入序号): ").strip()) - 1
+                        if 0 <= target_idx < len(targets):
+                            target_client = targets[target_idx]
+                            print(f"\n正在同步到 {target_client['name']}...")
+
+                            result = skill_manager.sync_skill_to_client(skill_id, target_client['id'])
+                            if result['success']:
+                                print(f"✅ {result['message']}")
+                                print(f"   目标路径: {result['target_path']}")
+                            else:
+                                print(f"❌ 同步失败: {result['error']}")
+                        else:
+                            print("❌ 无效选择")
+                    except ValueError:
+                        print("❌ 无效输入")
                 else:
                     print("❌ 无效的序号")
             except ValueError:
