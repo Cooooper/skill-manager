@@ -156,7 +156,9 @@ The web dashboard provides:
 | Feature            | Description                                                     |
 | ------------------ | --------------------------------------------------------------- |
 | **Search**         | Filter skills by name or description                            |
+| **Sort**           | Sort by update time, install time, size, or name                |
 | **View Details**   | Click any skill card to see full SKILL.md content and file structure |
+| **File Browser**   | Click files in detail view to see their content                 |
 | **Source Info**    | See where each skill was installed from (GitHub, GitLab, etc.)  |
 | **Update**         | Pull latest code from GitHub/GitLab for git-based skills        |
 | **Share**          | Generate install prompts for sharing with AI CLI users          |
@@ -164,7 +166,7 @@ The web dashboard provides:
 | **Uninstall**      | Delete skills with confirmation dialog                          |
 | **Refresh**        | Rescan the skills directory for changes                         |
 | **Statistics**     | See total skill count and storage usage                         |
-| **AI Clients**     | Detect and manage multiple installed AI CLI tools               |
+| **AI Client Switch** | Switch between different AI CLI clients in the dashboard       |
 
 ## Dashboard Features
 
@@ -181,15 +183,38 @@ Each skill is displayed as a card showing:
 
 ### Detail View
 
-Click "View" to see:
+Click any skill card to see detailed information with a two-column layout:
 
-- Full description
-- Version number
-- **Source information** (type, author, install date, repository URL)
-- File location
-- Complete file list with sizes
-- Full SKILL.md content (syntax highlighted)
-- **Share button** to share the skill with others
+**Left Sidebar:**
+- 📂 **File Browser**: Complete file list with sizes
+  - Click any file to view its content
+  - Syntax highlighting for code files
+  - File size limit: 1MB
+- **Skill Metadata**: Version, source, size, author
+
+**Right Main Area:**
+- 📝 Full description
+- 🔗 Source link (if from GitHub/GitLab)
+- 📍 Local file path
+- 📄 File content viewer (switches between files)
+
+### Sorting
+
+Sort skills by clicking the "排序" (Sort) dropdown:
+
+| Sort Option | Description |
+| ----------- | ----------- |
+| **更新时间** | Last modified time (default) |
+| **安装时间** | Installation/creation time |
+| **体积大小** | Directory size (largest first) |
+| **名称** | Alphabetical order |
+
+### AI Client Switcher
+
+Click the client name in the hero card (e.g., "🤖 Claude Code ▼") to:
+- View all detected AI CLI clients
+- Switch between different clients' skill directories
+- See skill count for each client
 
 ### Source Detection
 
@@ -290,16 +315,19 @@ For skills installed from GitHub or GitLab, you can update them to the latest ve
 
 ### API Endpoints
 
-| Endpoint                    | Method | Description                   |
-| --------------------------- | ------ | ----------------------------- |
-| `/`                         | GET    | Serve dashboard HTML          |
-| `/api/skills`               | GET    | List all skills with metadata |
-| `/api/skills/:id`           | GET    | Get detailed skill info       |
-| `/api/skills/:id`           | DELETE | Uninstall a skill             |
-| `/api/skills/:id/sync`      | POST   | Sync skill to another client  |
-| `/api/skills/:id/update`    | POST   | Update skill from git remote  |
-| `/api/clients`              | GET    | List all detected AI clients  |
-| `/api/sync/targets`         | GET    | Get available sync targets    |
+| Endpoint                              | Method | Description                   |
+| ------------------------------------- | ------ | ----------------------------- |
+| `/`                                   | GET    | Serve dashboard HTML          |
+| `/api/skills?sort={field}`            | GET    | List all skills with metadata |
+| `/api/skills/:id`                     | GET    | Get detailed skill info       |
+| `/api/skills/:id/file?path={path}`    | GET    | Get content of a specific file |
+| `/api/skills/:id`                     | DELETE | Uninstall a skill             |
+| `/api/skills/:id/sync`                | POST   | Sync skill to another client  |
+| `/api/skills/:id/update`              | POST   | Update skill from git remote  |
+| `/api/clients`                        | GET    | List all detected AI clients  |
+| `/api/sync/targets`                   | GET    | Get available sync targets    |
+
+**Sort Options:** `updated_at` (default), `created_at`, `size`, `name`
 
 ### Skill Metadata Parsing
 
@@ -309,6 +337,8 @@ The server parses each skill's `SKILL.md` and git history to extract:
 - `description` - from frontmatter or first paragraph
 - `version` - from frontmatter (optional)
 - `size` - total directory size
+- `created_at` - installation date (from git history or filesystem)
+- `updated_at` - last modified date (from git history or filesystem)
 - `has_scripts` - whether `scripts/` directory exists
 - `source` - installation source information:
   - `type` - github, gitlab, bitbucket, git, or local

@@ -15,6 +15,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 import webbrowser
 from threading import Timer
+from datetime import datetime
 
 # Configuration
 DEFAULT_PORT = 8765
@@ -22,10 +23,26 @@ MAX_PORT_ATTEMPTS = 10
 
 # Supported AI Clients and their skills directories
 AI_CLIENTS = {
-    "claude": {"name": "Claude Code", "skills_dir": ".claude/skills", "config_dir": ".claude"},
-    "qoder": {"name": "Qoder", "skills_dir": ".qoder/skills", "config_dir": ".qoder"},
-    "gemini": {"name": "Gemini CLI", "skills_dir": ".gemini/skills", "config_dir": ".gemini"},
-    "aone_copilot": {"name": "Aone Copilot", "skills_dir": ".aone_copilot/skills", "config_dir": ".aone_copilot"},
+    "claude": {
+        "name": "Claude Code",
+        "skills_dir": "~/.claude/skills",
+        "config_dir": "~/.claude",
+    },
+    "qoder": {
+        "name": "Qoder",
+        "skills_dir": "~/.qoder/skills",
+        "config_dir": "~/.qoder",
+    },
+    "gemini": {
+        "name": "Gemini CLI",
+        "skills_dir": "~/.gemini/skills",
+        "config_dir": "~/.gemini",
+    },
+    "aone_copilot": {
+        "name": "Aone Copilot",
+        "skills_dir": "~/.aone_copilot/skills",
+        "config_dir": "~/.aone_copilot",
+    },
 }
 
 
@@ -35,19 +52,42 @@ def detect_ai_clients():
     detected = []
 
     for client_id, config in AI_CLIENTS.items():
-        config_path = home / config["config_dir"]
-        skills_path = home / config["skills_dir"]
+        config_dir = config["config_dir"]
+        skills_dir = config["skills_dir"]
+
+        # Handle paths that may start with ~/ or just be relative
+        if config_dir.startswith("~/"):
+            config_path = home / config_dir[2:]
+        else:
+            config_path = home / config_dir
+
+        if skills_dir.startswith("~/"):
+            skills_path = home / skills_dir[2:]
+        else:
+            skills_path = home / skills_dir
 
         # Check if config directory exists (indicates installation)
         if config_path.exists():
-            detected.append({
-                "id": client_id,
-                "name": config["name"],
-                "skills_dir": str(skills_path),
-                "config_dir": str(config_path),
-                "has_skills": skills_path.exists() and skills_path.is_dir(),
-                "skill_count": len([d for d in skills_path.iterdir() if d.is_dir() and (d / "SKILL.md").exists()]) if skills_path.exists() else 0
-            })
+            detected.append(
+                {
+                    "id": client_id,
+                    "name": config["name"],
+                    "skills_dir": str(skills_path),
+                    "config_dir": str(config_path),
+                    "has_skills": skills_path.exists() and skills_path.is_dir(),
+                    "skill_count": (
+                        len(
+                            [
+                                d
+                                for d in skills_path.iterdir()
+                                if d.is_dir() and (d / "SKILL.md").exists()
+                            ]
+                        )
+                        if skills_path.exists()
+                        else 0
+                    ),
+                }
+            )
 
     return detected
 
@@ -58,7 +98,7 @@ class SkillManager:
         self.cli_client = cli_client
         self.skills = []
 
-    def scan_skills(self):
+    def scan_skills(self, sort_by="updated_at"):
         """Scan the skills directory and parse metadata."""
         self.skills = []
 
@@ -77,8 +117,19 @@ class SkillManager:
             if skill_info:
                 self.skills.append(skill_info)
 
-        # Sort by name
-        self.skills.sort(key=lambda x: x["name"].lower())
+        # Sort skills based on sort_by parameter
+        if sort_by == "name":
+            self.skills.sort(key=lambda x: x["name"].lower())
+        elif sort_by == "size":
+            self.skills.sort(key=lambda x: x.get("size", 0), reverse=True)
+        elif sort_by == "created_at":
+            self.skills.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        elif sort_by == "updated_at":
+            self.skills.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        else:
+            # Default sort by updated_at
+            self.skills.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+
         return self.skills
 
     def _get_skill_source(self, skill_path: Path) -> dict:
@@ -126,10 +177,12 @@ class SkillManager:
                             # Convert SSH URL to HTTPS for sharing
                             if remote_url.startswith("git@"):
                                 # Extract domain from git@domain:path format
-                                match = re.match(r'git@([^:]+):(.+)', remote_url)
+                                match = re.match(r"git@([^:]+):(.+)", remote_url)
                                 if match:
                                     domain, path = match.groups()
-                                    source_info["url"] = f"https://{domain}/{path}".replace(".git", "")
+                                    source_info["url"] = (
+                                        f"https://{domain}/{path}".replace(".git", "")
+                                    )
                                 else:
                                     source_info["url"] = remote_url.replace(".git", "")
                             else:
@@ -172,6 +225,26 @@ class SkillManager:
                     )
                     if result.returncode == 0 and result.stdout.strip():
                         source_info["install_date"] = result.stdout.strip().split()[0]
+                except:
+                    pass
+
+                # Try to get last update date from git log (newest commit)
+                try:
+                    result = subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(skill_path),
+                            "log",
+                            "--format=%ci",
+                            "-1",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        source_info["updated_at"] = result.stdout.strip().split()[0]
                 except:
                     pass
 
@@ -222,6 +295,15 @@ class SkillManager:
             if "author" in frontmatter:
                 source_info["author"] = frontmatter["author"]
 
+            # Get file timestamps as fallback for non-git skills
+            stat = skill_path.stat()
+            created_at = source_info.get("install_date") or datetime.fromtimestamp(
+                stat.st_ctime
+            ).strftime("%Y-%m-%d")
+            updated_at = source_info.get("updated_at") or datetime.fromtimestamp(
+                stat.st_mtime
+            ).strftime("%Y-%m-%d")
+
             return {
                 "id": skill_path.name,
                 "name": frontmatter.get("name", skill_path.name),
@@ -232,6 +314,8 @@ class SkillManager:
                 "has_scripts": (skill_path / "scripts").exists(),
                 "size": self._get_dir_size(skill_path),
                 "source": source_info,
+                "created_at": created_at,
+                "updated_at": updated_at,
             }
 
         except Exception as e:
@@ -289,6 +373,31 @@ class SkillManager:
             print(f"Error reading skill detail: {e}")
             return None
 
+    def get_skill_file_content(self, skill_id: str, file_path: str) -> dict:
+        """Get the content of a specific file within a skill."""
+        skill_path = self.skills_dir / skill_id
+        target_file = skill_path / file_path
+
+        # Security check: ensure the file is within the skill directory
+        try:
+            target_file.resolve().relative_to(skill_path.resolve())
+        except ValueError:
+            return {"success": False, "error": "Invalid file path"}
+
+        if not target_file.exists() or not target_file.is_file():
+            return {"success": False, "error": "File not found"}
+
+        # Check file size (limit to 1MB)
+        max_size = 1024 * 1024
+        if target_file.stat().st_size > max_size:
+            return {"success": False, "error": "File too large (>1MB)"}
+
+        try:
+            content = target_file.read_text(encoding="utf-8", errors="replace")
+            return {"success": True, "content": content, "path": file_path}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to read file: {e}"}
+
     def delete_skill(self, skill_id: str) -> bool:
         """Delete a skill directory."""
         skill_path = self.skills_dir / skill_id
@@ -328,7 +437,10 @@ class SkillManager:
             try:
                 target_skills_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                return {"success": False, "error": f"Failed to create target directory: {e}"}
+                return {
+                    "success": False,
+                    "error": f"Failed to create target directory: {e}",
+                }
 
         # Source and target paths
         source_path = Path(skill["path"])
@@ -336,7 +448,10 @@ class SkillManager:
 
         # Check if already exists
         if target_skill_path.exists():
-            return {"success": False, "error": f"Skill '{skill['id']}' already exists in {target_config['name']}"}
+            return {
+                "success": False,
+                "error": f"Skill '{skill['id']}' already exists in {target_config['name']}",
+            }
 
         try:
             # Copy the entire skill directory
@@ -353,7 +468,7 @@ class SkillManager:
             return {
                 "success": True,
                 "message": f"Successfully synced '{skill['name']}' to {target_config['name']}",
-                "target_path": str(target_skill_path)
+                "target_path": str(target_skill_path),
             }
         except Exception as e:
             return {"success": False, "error": f"Failed to sync skill: {e}"}
@@ -372,7 +487,10 @@ class SkillManager:
 
         source_type = skill.get("source", {}).get("type")
         if source_type not in ("github", "gitlab"):
-            return {"success": False, "error": f"Skill source type '{source_type}' does not support update"}
+            return {
+                "success": False,
+                "error": f"Skill source type '{source_type}' does not support update",
+            }
 
         skill_path = Path(skill["path"])
         git_dir = skill_path / ".git"
@@ -381,15 +499,18 @@ class SkillManager:
             return {"success": False, "error": "Not a git repository"}
 
         try:
-            # Check if there are uncommitted changes
+            # Check if there are uncommitted changes (ignore untracked files)
             result = subprocess.run(
-                ["git", "-C", str(skill_path), "status", "--porcelain"],
+                ["git", "-C", str(skill_path), "status", "--porcelain", "--untracked-files=no"],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
             if result.stdout.strip():
-                return {"success": False, "error": "Skill has uncommitted changes. Please commit or discard changes before updating."}
+                return {
+                    "success": False,
+                    "error": "Skill has uncommitted changes. Please commit or discard changes before updating.",
+                }
 
             # Get current commit hash for comparison
             result = subprocess.run(
@@ -408,11 +529,21 @@ class SkillManager:
                 timeout=30,
             )
             if result.returncode != 0:
-                return {"success": False, "error": f"Failed to fetch from remote: {result.stderr}"}
+                return {
+                    "success": False,
+                    "error": f"Failed to fetch from remote: {result.stderr}",
+                }
 
             # Get default branch (usually main or master)
             result = subprocess.run(
-                ["git", "-C", str(skill_path), "rev-parse", "--abbrev-ref", "origin/HEAD"],
+                [
+                    "git",
+                    "-C",
+                    str(skill_path),
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "origin/HEAD",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -420,7 +551,14 @@ class SkillManager:
             if result.returncode != 0:
                 # Fallback to main/master
                 result = subprocess.run(
-                    ["git", "-C", str(skill_path), "rev-parse", "--verify", "origin/main"],
+                    [
+                        "git",
+                        "-C",
+                        str(skill_path),
+                        "rev-parse",
+                        "--verify",
+                        "origin/main",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -456,14 +594,14 @@ class SkillManager:
                 return {
                     "success": True,
                     "message": f"'{skill['name']}' is already up to date",
-                    "commit": new_commit[:8] if new_commit else None
+                    "commit": new_commit[:8] if new_commit else None,
                 }
 
             return {
                 "success": True,
                 "message": f"Successfully updated '{skill['name']}'",
                 "old_commit": old_commit[:8] if old_commit else None,
-                "new_commit": new_commit[:8] if new_commit else None
+                "new_commit": new_commit[:8] if new_commit else None,
             }
 
         except subprocess.TimeoutExpired:
@@ -503,9 +641,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_html(HTML_TEMPLATE)
 
         elif path == "/api/skills":
-            skills = self.skill_manager.scan_skills()
+            # Get sort parameter from query string
+            query_params = urllib.parse.parse_qs(parsed_path.query)
+            sort_by = query_params.get("sort", ["updated_at"])[0]
+            skills = self.skill_manager.scan_skills(sort_by=sort_by)
             self._send_json(
-                {"skills": skills, "cli_client": self.skill_manager.cli_client}
+                {
+                    "skills": skills,
+                    "cli_client": self.skill_manager.cli_client,
+                    "skills_dir": str(self.skill_manager.skills_dir),
+                }
             )
 
         elif path == "/api/clients":
@@ -527,12 +672,30 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json({"targets": targets, "current": current_client})
 
         elif path.startswith("/api/skills/"):
-            skill_id = path.split("/")[-1]
-            detail = self.skill_manager.get_skill_detail(skill_id)
-            if detail:
-                self._send_json(detail)
+            parts = path.split("/")
+            if len(parts) >= 4 and parts[-1] == "file":
+                # Handle file content request: /api/skills/{skill_id}/file?path={file_path}
+                skill_id = parts[3]
+                query_params = urllib.parse.parse_qs(parsed_path.query)
+                file_path = query_params.get("path", [""])[0]
+
+                if not file_path:
+                    self._send_json({"error": "Missing file path"}, 400)
+                    return
+
+                result = self.skill_manager.get_skill_file_content(skill_id, file_path)
+                if result.get("success"):
+                    self._send_json(result)
+                else:
+                    self._send_json(result, 404)
             else:
-                self._send_json({"error": "Skill not found"}, 404)
+                # Regular skill detail request
+                skill_id = parts[-1]
+                detail = self.skill_manager.get_skill_detail(skill_id)
+                if detail:
+                    self._send_json(detail)
+                else:
+                    self._send_json({"error": "Skill not found"}, 404)
 
         else:
             self._send_json({"error": "Not found"}, 404)
@@ -557,8 +720,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         path = parsed_path.path
 
         # Read request body
-        content_length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = (
+            self.rfile.read(content_length).decode("utf-8")
+            if content_length > 0
+            else "{}"
+        )
 
         try:
             data = json.loads(body)
@@ -576,7 +743,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "Missing target_client"}, 400)
                     return
 
-                result = self.skill_manager.sync_skill_to_client(skill_id, target_client)
+                result = self.skill_manager.sync_skill_to_client(
+                    skill_id, target_client
+                )
                 if result.get("success"):
                     self._send_json(result)
                 else:
@@ -595,6 +764,44 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self._send_json(result, 400)
             else:
                 self._send_json({"error": "Invalid path"}, 400)
+        elif path == "/api/switch-client":
+            # Handle client switch request
+            client_id = data.get("client_id")
+            if not client_id:
+                self._send_json({"error": "Missing client_id"}, 400)
+                return
+
+            if client_id not in AI_CLIENTS:
+                self._send_json({"error": f"Unknown client: {client_id}"}, 400)
+                return
+
+            # Update the skill manager with new skills directory
+            home = Path.home()
+            new_skills_dir = home / AI_CLIENTS[client_id]["skills_dir"]
+            new_cli_client = AI_CLIENTS[client_id]["name"]
+
+            if not new_skills_dir.exists():
+                # Create the directory if it doesn't exist
+                try:
+                    new_skills_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    self._send_json(
+                        {"error": f"Failed to create skills directory: {e}"}, 500
+                    )
+                    return
+
+            # Update skill manager
+            self.skill_manager.skills_dir = new_skills_dir
+            self.skill_manager.cli_client = new_cli_client
+
+            self._send_json(
+                {
+                    "success": True,
+                    "client_id": client_id,
+                    "client_name": new_cli_client,
+                    "skills_dir": str(new_skills_dir),
+                }
+            )
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -857,6 +1064,151 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: var(--primary);
             color: white;
             border-color: var(--primary);
+        }
+
+        /* Sort Selector */
+        .sort-section {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 20px;
+        }
+
+        .sort-label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .sort-select {
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: white;
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .sort-select:hover {
+            border-color: var(--primary);
+        }
+
+        .sort-select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-light);
+        }
+
+        /* AI Client Switcher */
+        .client-switcher {
+            position: relative;
+            display: inline-block;
+            z-index: 2000;
+        }
+
+        .client-switcher-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .client-switcher-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .client-switcher-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 8px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: var(--shadow-lg);
+            min-width: 220px;
+            z-index: 1000;
+            display: none;
+            overflow: hidden;
+        }
+
+        .client-switcher-dropdown.active {
+            display: block;
+        }
+
+        .client-switcher-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 12px;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .client-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-bottom: 1px solid #f5f5f5;
+        }
+
+        .client-option:last-child {
+            border-bottom: none;
+        }
+
+        .client-option:hover {
+            background: var(--primary-light);
+        }
+
+        .client-option.active {
+            background: var(--primary-light);
+        }
+
+        .client-option-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            background: #f5f5f5;
+        }
+
+        .client-option-info {
+            flex: 1;
+        }
+
+        .client-option-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .client-option-count {
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+
+        .client-option-check {
+            color: var(--primary);
+            font-size: 16px;
+            opacity: 0;
+        }
+
+        .client-option.active .client-option-check {
+            opacity: 1;
         }
 
         /* Section Title */
@@ -1383,13 +1735,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px 0;
-            border-bottom: 1px solid #e5e7eb;
+            padding: 8px 12px;
+            margin: 0 -12px;
+            border-radius: 6px;
             font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
         }
 
-        .file-tree-item:last-child {
-            border-bottom: none;
+        .file-tree-item:hover {
+            background: rgba(0, 0, 0, 0.04);
+        }
+
+        .file-tree-item.active {
+            background: var(--primary-light);
+        }
+
+        .file-tree-item.active .file-tree-path {
+            color: var(--primary);
+            font-weight: 500;
         }
 
         .file-tree-path {
@@ -1768,7 +2132,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <p class="hero-subtitle">本地 AI Skills 管理平台，轻松查看、管理和分享你的 AI 技能库</p>
             </div>
             <div class="hero-card">
-                <div class="hero-card-title">🤖 <span id="cliBadge">Loading...</span></div>
+                <div class="hero-card-title">
+                    <div class="client-switcher">
+                        <button class="client-switcher-btn" onclick="toggleClientSwitcher()">
+                            <span id="cliBadge">Loading...</span>
+                            <span>▼</span>
+                        </button>
+                        <div class="client-switcher-dropdown" id="clientSwitcherDropdown">
+                            <div class="client-switcher-header">选择 AI Client</div>
+                            <div id="clientOptions">
+                                <!-- Dynamic content -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="hero-card-stats">
                     <div class="hero-card-stat">
                         <div class="hero-card-stat-value" id="heroTotalSkills">-</div>
@@ -1798,6 +2175,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <div class="filter-tag" data-filter="gitlab">GitLab</div>
                     <div class="filter-tag" data-filter="git">Git</div>
                     <div class="filter-tag" data-filter="local">本地</div>
+                </div>
+                <div class="sort-section">
+                    <span class="sort-label">排序:</span>
+                    <select class="sort-select" id="sortSelect" onchange="changeSort()">
+                        <option value="updated_at">更新时间</option>
+                        <option value="created_at">安装时间</option>
+                        <option value="size">体积大小</option>
+                    </select>
                 </div>
                 <button class="btn btn-primary" onclick="refreshSkills()" style="margin-left: auto;">
                     🔄 刷新列表
@@ -1950,9 +2335,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let currentSkill = null;
         let skillToDelete = null;
         let currentFilter = 'all';
+        let currentSort = 'updated_at';
+        let allClients = [];
+        let currentClientId = 'claude';
+        let selectedFilePath = null;
+        let currentDetailFiles = [];
 
         // Load skills on page load
-        document.addEventListener('DOMContentLoaded', loadSkills);
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSkills();
+            loadAllClients();
+        });
 
         // Search functionality
         document.getElementById('searchInput').addEventListener('input', (e) => {
@@ -1971,18 +2364,121 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function loadSkills() {
             try {
-                const response = await fetch('/api/skills');
+                const response = await fetch(`/api/skills?sort=${currentSort}`);
                 const data = await response.json();
                 allSkills = data.skills;
                 filteredSkills = [...allSkills];
 
                 document.getElementById('cliBadge').textContent = data.cli_client || 'AI CLI';
+                currentClientId = detectCurrentClientId(data.cli_client);
                 updateStats();
                 renderSkills(filteredSkills);
             } catch (error) {
                 showToast('加载失败', 'error');
                 console.error(error);
             }
+        }
+
+        function detectCurrentClientId(cliClientName) {
+            const clientMap = {
+                'Claude Code': 'claude',
+                'Qoder': 'qoder',
+                'Gemini CLI': 'gemini',
+                'Aone Copilot': 'aone_copilot'
+            };
+            return clientMap[cliClientName] || 'claude';
+        }
+
+        async function loadAllClients() {
+            try {
+                const response = await fetch('/api/clients');
+                const data = await response.json();
+                allClients = data.clients;
+                renderClientSwitcher();
+            } catch (error) {
+                console.error('Failed to load clients:', error);
+            }
+        }
+
+        function renderClientSwitcher() {
+            const container = document.getElementById('clientOptions');
+            if (!container) return;
+
+            container.innerHTML = allClients.map(client => `
+                <div class="client-option ${client.id === currentClientId ? 'active' : ''}" onclick="switchClient('${client.id}')">
+                    <div class="client-option-icon">${getClientIcon(client.id)}</div>
+                    <div class="client-option-info">
+                        <div class="client-option-name">${escapeHtml(client.name)}</div>
+                        <div class="client-option-count">${client.skill_count} 个 skills</div>
+                    </div>
+                    <div class="client-option-check">✓</div>
+                </div>
+            `).join('');
+        }
+
+        function getClientIcon(clientId) {
+            const icons = {
+                'claude': '🤖',
+                'qoder': '🚀',
+                'gemini': '♊',
+                'aone_copilot': '👥'
+            };
+            return icons[clientId] || '🤖';
+        }
+
+        function toggleClientSwitcher() {
+            const dropdown = document.getElementById('clientSwitcherDropdown');
+            dropdown.classList.toggle('active');
+        }
+
+        async function switchClient(clientId) {
+            const client = allClients.find(c => c.id === clientId);
+            if (!client) return;
+
+            // Close dropdown
+            document.getElementById('clientSwitcherDropdown').classList.remove('active');
+
+            // If same client, do nothing
+            if (clientId === currentClientId) return;
+
+            showToast(`正在切换到 ${client.name}...`, 'success');
+
+            try {
+                // Call API to switch client
+                const response = await fetch('/api/switch-client', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ client_id: clientId })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Update current client
+                    currentClientId = clientId;
+
+                    // Reload skills with new client
+                    await loadSkills();
+
+                    // Update UI
+                    renderClientSwitcher();
+
+                    showToast(`已切换到 ${client.name}`, 'success');
+                } else {
+                    showToast(result.error || '切换失败', 'error');
+                }
+            } catch (error) {
+                showToast('切换失败，请重试', 'error');
+                console.error(error);
+            }
+        }
+
+        function changeSort() {
+            const select = document.getElementById('sortSelect');
+            currentSort = select.value;
+            loadSkills();
         }
 
         function updateStats() {
@@ -2120,15 +2616,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const sourceType = currentSkill.source?.type || 'local';
                 const canUpdate = sourceType === 'github' || sourceType === 'gitlab';
 
+                // Store files for later use
+                currentDetailFiles = detail.files || [];
+                selectedFilePath = 'SKILL.md'; // Default select SKILL.md
+
+                // Get SKILL.md file info
+                const skillMdFile = currentDetailFiles.find(f => f.path === 'SKILL.md');
+
                 document.getElementById('detailBody').innerHTML = `
                     <div class="detail-layout">
                         <!-- Left Sidebar: File Tree & Meta -->
                         <div class="detail-sidebar">
                             <div class="file-tree">
                                 <div class="file-tree-header">📂 文件 (${detail.file_count || 0})</div>
-                                <ul class="file-tree-list">
+                                <ul class="file-tree-list" id="fileTreeList">
                                     ${(detail.files || []).map(f => `
-                                        <li class="file-tree-item">
+                                        <li class="file-tree-item ${f.path === 'SKILL.md' ? 'active' : ''}" onclick="selectFile('${escapeHtml(f.path)}')">
                                             <span class="file-tree-path">${escapeHtml(f.path)}</span>
                                             <span class="file-tree-size">${formatSize(f.size)}</span>
                                         </li>
@@ -2158,7 +2661,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         </div>
 
                         <!-- Right Main: Description & Content -->
-                        <div class="detail-main">
+                        <div class="detail-main" id="detailMain">
                             <div class="detail-section">
                                 <h3>📝 描述</h3>
                                 <div class="detail-content">${escapeHtml(currentSkill.description || '暂无描述')}</div>
@@ -2175,9 +2678,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 <h3>📍 本地路径</h3>
                                 <div class="detail-content" style="font-family: monospace; font-size: 13px;">${escapeHtml(currentSkill.path)}</div>
                             </div>
-                            <div class="detail-section">
-                                <h3>📄 SKILL.md</h3>
-                                <div class="code-block">${escapeHtml(detail.content || 'No content')}</div>
+                            <div class="detail-section" id="fileContentSection">
+                                <h3 id="fileContentTitle">📄 SKILL.md</h3>
+                                <div class="code-block" id="fileContent">${escapeHtml(detail.content || 'No content')}</div>
                             </div>
                         </div>
                     </div>
@@ -2186,6 +2689,41 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 document.getElementById('detailModal').classList.add('active');
             } catch (error) {
                 showToast('加载详情失败', 'error');
+            }
+        }
+
+        async function selectFile(filePath) {
+            if (!currentSkill) return;
+
+            selectedFilePath = filePath;
+
+            // Update UI to show active file
+            document.querySelectorAll('.file-tree-item').forEach(item => {
+                item.classList.remove('active');
+                if (item.querySelector('.file-tree-path')?.textContent === filePath) {
+                    item.classList.add('active');
+                }
+            });
+
+            // Update file content title
+            document.getElementById('fileContentTitle').textContent = `📄 ${filePath}`;
+
+            // Load file content
+            const fileContentDiv = document.getElementById('fileContent');
+            fileContentDiv.textContent = '加载中...';
+
+            try {
+                const response = await fetch(`/api/skills/${currentSkill.id}/file?path=${encodeURIComponent(filePath)}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    fileContentDiv.textContent = data.content || '(空文件)';
+                } else {
+                    fileContentDiv.textContent = `加载失败: ${data.error || '未知错误'}`;
+                }
+            } catch (error) {
+                fileContentDiv.textContent = '加载文件内容失败';
+                console.error(error);
             }
         }
 
@@ -2585,6 +3123,15 @@ Skill 简介：${skillDesc}`;
             });
         });
 
+        // Close client switcher when clicking outside
+        document.addEventListener('click', (e) => {
+            const switcher = document.querySelector('.client-switcher');
+            const dropdown = document.getElementById('clientSwitcherDropdown');
+            if (switcher && dropdown && !switcher.contains(e.target)) {
+                dropdown.classList.remove('active');
+            }
+        });
+
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
@@ -2592,6 +3139,9 @@ Skill 简介：${skillDesc}`;
                 closeConfirmModal();
                 closeShareModal();
                 closeSyncModal();
+                // Close client switcher
+                const dropdown = document.getElementById('clientSwitcherDropdown');
+                if (dropdown) dropdown.classList.remove('active');
             }
         });
     </script>
@@ -2643,39 +3193,41 @@ def print_skill_detail(skill):
     print(f"📦 {skill.get('name', skill['id'])}")
     print("=" * 60)
 
-    desc = skill.get('description', '暂无描述')
+    desc = skill.get("description", "暂无描述")
     if desc:
         print(f"\n📝 描述:\n   {desc}")
 
-    version = skill.get('version', 'N/A')
+    version = skill.get("version", "N/A")
     print(f"\n📌 版本: {version}")
 
     print(f"📁 路径: {skill.get('path', 'N/A')}")
     print(f"📊 大小: {format_size_cli(skill.get('size', 0))}")
 
-    if skill.get('has_scripts'):
+    if skill.get("has_scripts"):
         print("📜 包含 scripts: 是")
 
     # Source info
-    source = skill.get('source', {})
-    if source and source.get('type') != 'local':
+    source = skill.get("source", {})
+    if source and source.get("type") != "local":
         print(f"\n🔗 来源: {source.get('type', 'unknown').upper()}")
-        url = source.get('url') or source.get('remote')
+        url = source.get("url") or source.get("remote")
         if url:
             print(f"   URL: {url}")
-        if source.get('author'):
+        if source.get("author"):
             print(f"   作者: {source['author']}")
-        if source.get('install_date'):
+        if source.get("install_date"):
             print(f"   安装时间: {source['install_date']}")
     else:
         print(f"\n🔗 来源: Local (本地安装)")
 
     # Files list
-    files = skill.get('files', [])
+    files = skill.get("files", [])
     if files:
         print(f"\n📂 文件列表 ({len(files)} 个):")
         for f in files[:10]:  # Show first 10 files
-            print(f"   • {f.get('name', 'unknown')} ({format_size_cli(f.get('size', 0))})")
+            print(
+                f"   • {f.get('name', 'unknown')} ({format_size_cli(f.get('size', 0))})"
+            )
         if len(files) > 10:
             print(f"   ... 还有 {len(files) - 10} 个文件")
 
@@ -2684,15 +3236,19 @@ def print_skill_detail(skill):
 
 def generate_share_text(skill):
     """Generate installation prompt for sharing."""
-    has_git_source = skill.get('source') and (skill.get('source', {}).get('url') or skill.get('source', {}).get('remote'))
-    is_local = not has_git_source or skill.get('source', {}).get('type') == 'local'
+    has_git_source = skill.get("source") and (
+        skill.get("source", {}).get("url") or skill.get("source", {}).get("remote")
+    )
+    is_local = not has_git_source or skill.get("source", {}).get("type") == "local"
 
     if is_local:
         return f"我想安装 \"{skill.get('name', skill['id'])}\" 这个 skill，请帮我使用 find-skills 查找并安装。"
     else:
-        repo_url = skill.get('source', {}).get('url') or skill.get('source', {}).get('remote')
-        skill_desc = skill.get('description', '一个实用的 AI CLI skill')
-        skill_id = skill.get('id', 'skill-name')
+        repo_url = skill.get("source", {}).get("url") or skill.get("source", {}).get(
+            "remote"
+        )
+        skill_desc = skill.get("description", "一个实用的 AI CLI skill")
+        skill_id = skill.get("id", "skill-name")
 
         return f"""请帮我安装 "{skill.get('name', skill_id)}" 这个 skill。
 
@@ -2717,15 +3273,19 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
         print("-" * 70)
 
         for idx, skill in enumerate(skills, 1):
-            name = skill.get('name', skill['id'])[:20]
-            version = (skill.get('version') or 'N/A')[:8]
-            source_type = (skill.get('source', {}).get('type') or 'local')[:8]
-            size = format_size_cli(skill.get('size', 0))
+            name = skill.get("name", skill["id"])[:20]
+            version = (skill.get("version") or "N/A")[:8]
+            source_type = (skill.get("source", {}).get("type") or "local")[:8]
+            size = format_size_cli(skill.get("size", 0))
             print(f"{idx:<4} {name:<22} {version:<10} {source_type:<10} {size:<8}")
 
         print("-" * 70)
-        print("\n操作: [数字] 查看详情 | [s数字] 分享 | [y数字] 同步 | [d数字] 卸载 | [a] AI Clients | [q] 退出")
-        print("示例: 1 (查看#1详情) | s1 (分享#1) | y1 (同步#1) | d1 (卸载#1) | a (查看AI Clients)")
+        print(
+            "\n操作: [数字] 查看详情 | [s数字] 分享 | [y数字] 同步 | [d数字] 卸载 | [a] AI Clients | [q] 退出"
+        )
+        print(
+            "示例: 1 (查看#1详情) | s1 (分享#1) | y1 (同步#1) | d1 (卸载#1) | a (查看AI Clients)"
+        )
 
         try:
             choice = input("\n> ").strip().lower()
@@ -2733,12 +3293,12 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
             print("\n\nbye!")
             break
 
-        if choice == 'q' or choice == 'quit':
+        if choice == "q" or choice == "quit":
             print("\nbye!")
             break
 
         # Parse command
-        if choice.startswith('s'):  # Share
+        if choice.startswith("s"):  # Share
             try:
                 idx = int(choice[1:]) - 1
                 if 0 <= idx < len(skills):
@@ -2753,20 +3313,20 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
             except ValueError:
                 print("❌ 无效输入")
 
-        elif choice.startswith('d'):  # Delete/Uninstall
+        elif choice.startswith("d"):  # Delete/Uninstall
             try:
                 idx = int(choice[1:]) - 1
                 if 0 <= idx < len(skills):
                     skill = skills[idx]
                     print(f"\n⚠️  确认卸载 \"{skill.get('name', skill['id'])}\"?")
                     confirm = input("输入 'yes' 确认卸载: ").strip().lower()
-                    if confirm == 'yes':
-                        skill_path = Path(skills_dir) / skill['id']
+                    if confirm == "yes":
+                        skill_path = Path(skills_dir) / skill["id"]
                         if skill_path.exists():
                             shutil.rmtree(skill_path)
                             print(f"✅ \"{skill.get('name', skill['id'])}\" 已卸载")
                             # Refresh skills list
-                            skills = [s for s in skills if s['id'] != skill['id']]
+                            skills = [s for s in skills if s["id"] != skill["id"]]
                         else:
                             print("❌ 目录不存在")
                     else:
@@ -2786,7 +3346,7 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
             except ValueError:
                 print("❌ 无效输入")
 
-        elif choice == 'a':  # Show AI Clients
+        elif choice == "a":  # Show AI Clients
             print("\n🤖 已安装的 AI Clients:")
             print("-" * 60)
             clients = detect_ai_clients()
@@ -2794,12 +3354,12 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
 
             # Find current client name
             for client in clients:
-                if client['skills_dir'] == str(skills_dir):
-                    current_client_name = client['name']
+                if client["skills_dir"] == str(skills_dir):
+                    current_client_name = client["name"]
                     break
 
             for client in clients:
-                is_current = client['skills_dir'] == str(skills_dir)
+                is_current = client["skills_dir"] == str(skills_dir)
                 marker = " 👈 当前" if is_current else ""
                 print(f"  {client['id']}: {client['name']}")
                 print(f"     路径: {client['skills_dir']}")
@@ -2812,26 +3372,30 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
             else:
                 print(f"💡 使用 'y数字' 命令将 skill 同步到其他 AI Client")
 
-        elif choice.startswith('y'):  # Sync (y = sync)
+        elif choice.startswith("y"):  # Sync (y = sync)
             try:
                 idx = int(choice[1:]) - 1
                 if 0 <= idx < len(skills):
                     skill = skills[idx]
-                    skill_id = skill['id']
+                    skill_id = skill["id"]
 
                     # Detect available sync targets
                     clients = detect_ai_clients()
-                    targets = [c for c in clients if c['skills_dir'] != str(skills_dir)]
+                    targets = [c for c in clients if c["skills_dir"] != str(skills_dir)]
 
                     if not targets:
                         print("❌ 未检测到其他已安装的 AI Client")
-                        print("   支持的客户端: Claude Code、Qoder、Gemini CLI、Aone Copilot")
+                        print(
+                            "   支持的客户端: Claude Code、Qoder、Gemini CLI、Aone Copilot"
+                        )
                         continue
 
                     print(f"\n🔄 同步 \"{skill.get('name', skill_id)}\" 到:")
                     print("-" * 60)
                     for i, target in enumerate(targets, 1):
-                        print(f"  {i}. {target['name']} ({target['skill_count']} skills)")
+                        print(
+                            f"  {i}. {target['name']} ({target['skill_count']} skills)"
+                        )
                         print(f"     路径: {target['skills_dir']}")
                     print()
 
@@ -2841,8 +3405,10 @@ def cli_interactive_menu(skills, cli_client, skills_dir):
                             target_client = targets[target_idx]
                             print(f"\n正在同步到 {target_client['name']}...")
 
-                            result = skill_manager.sync_skill_to_client(skill_id, target_client['id'])
-                            if result['success']:
+                            result = skill_manager.sync_skill_to_client(
+                                skill_id, target_client["id"]
+                            )
+                            if result["success"]:
                                 print(f"✅ {result['message']}")
                                 print(f"   目标路径: {result['target_path']}")
                             else:
@@ -2872,28 +3438,30 @@ def print_skills_table(skills, cli_client):
     print("-" * 100)
 
     for skill in skills:
-        name = skill.get('name', skill['id'])[:18]
-        version = (skill.get('version') or 'N/A')[:8]
-        source_type = (skill.get('source', {}).get('type') or 'local')[:10]
-        size = format_size_cli(skill.get('size', 0))
-        desc = (skill.get('description') or 'No description')[:40]
+        name = skill.get("name", skill["id"])[:18]
+        version = (skill.get("version") or "N/A")[:8]
+        source_type = (skill.get("source", {}).get("type") or "local")[:10]
+        size = format_size_cli(skill.get("size", 0))
+        desc = (skill.get("description") or "No description")[:40]
 
         print(f"{name:<20} {version:<10} {source_type:<12} {size:<8} {desc}")
 
     print("-" * 100)
 
     # Print source details section
-    git_skills = [s for s in skills if s.get('source', {}).get('type') not in (None, 'local')]
+    git_skills = [
+        s for s in skills if s.get("source", {}).get("type") not in (None, "local")
+    ]
     if git_skills:
         print("\n📋 Git Repository Sources:\n")
         for skill in git_skills:
-            source = skill.get('source', {})
-            url = source.get('url') or source.get('remote') or 'N/A'
-            author = source.get('author') or 'Unknown'
+            source = skill.get("source", {})
+            url = source.get("url") or source.get("remote") or "N/A"
+            author = source.get("author") or "Unknown"
             print(f"  • {skill.get('name', skill['id'])}")
             print(f"    URL: {url}")
             print(f"    Author: {author}")
-            if source.get('install_date'):
+            if source.get("install_date"):
                 print(f"    Installed: {source['install_date']}")
             print()
 
@@ -2904,17 +3472,19 @@ def main():
     simple_mode = False
     args = sys.argv[1:]
 
-    if '--cli' in args or '--list' in args or '-l' in args:
+    if "--cli" in args or "--list" in args or "-l" in args:
         cli_mode = True
         # Remove the flag from args
-        args = [a for a in args if a not in ('--cli', '--list', '-l')]
+        args = [a for a in args if a not in ("--cli", "--list", "-l")]
 
-    if '--simple' in args or '-s' in args:
+    if "--simple" in args or "-s" in args:
         simple_mode = True
-        args = [a for a in args if a not in ('--simple', '-s')]
+        args = [a for a in args if a not in ("--simple", "-s")]
 
     if len(args) < 1:
-        print("Usage: server.py <skills_dir> [cli_client] [--cli|--list|-l] [--simple|-s]")
+        print(
+            "Usage: server.py <skills_dir> [cli_client] [--cli|--list|-l] [--simple|-s]"
+        )
         print("\nOptions:")
         print("  --cli, --list, -l    Display skills in terminal (no web server)")
         print("  --simple, -s         Simple list mode (no interaction)")
