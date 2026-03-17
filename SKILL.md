@@ -60,7 +60,9 @@ if [ -z "$SKILLS_DIR" ]; then
 fi
 ```
 
-### Step 2: Start the Web Server
+### Step 2: Choose Display Mode
+
+#### Option A: Web Dashboard (Default)
 
 ```bash
 # Run the skill manager server
@@ -74,7 +76,25 @@ The server will:
 3. Automatically open your default browser
 4. Display all installed skills with metadata
 
+#### Option B: CLI Mode (Terminal)
+
+```bash
+# Display skills directly in terminal without starting web server
+python3 "$HOME/.claude/skills/skill-manager/scripts/server.py" "$SKILLS_DIR" "$CLI_CLIENT" --cli
+
+# Or use shorthand
+python3 "$HOME/.claude/skills/skill-manager/scripts/server.py" "$SKILLS_DIR" "$CLI_CLIENT" -l
+```
+
+CLI mode outputs a formatted table with:
+
+- Skill name, version, source type, size, and description
+- Git repository details (URL, author, install date) for git-based skills
+- No browser required - perfect for SSH sessions or quick lookups
+
 ### Step 3: User Interaction
+
+#### Web Dashboard Features
 
 The web dashboard provides:
 

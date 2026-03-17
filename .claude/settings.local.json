@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(browse)",
+      "Bash(~/.claude/skills/gstack/browse/dist/browse reload:*)",
+      "Bash(~/.claude/skills/gstack/browse/dist/browse goto:*)",
+      "Bash(~/.claude/skills/gstack/browse/dist/browse snapshot:*)",
+      "Bash(~/.claude/skills/gstack/browse/dist/browse click:*)",
+      "Bash(~/.claude/skills/gstack/browse/dist/browse press:*)",
+      "Bash(~/.claude/skills/gstack/browse/dist/browse fill:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}

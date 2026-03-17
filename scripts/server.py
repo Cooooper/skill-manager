@@ -1318,20 +1318,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- Top Skills Section -->
-        <div class="top-skills-section" id="topSkillsSection">
-            <h2 class="section-title">
-                <span class="icon">⭐</span>
-                精选 Skills
-                <span class="section-subtitle">最近安装的 Skills</span>
-            </h2>
-            <div class="top-skills-list" id="topSkillsList">
-                <!-- Top skills will be rendered here -->
-            </div>
-        </div>
-
         <!-- All Skills Grid -->
-        <div class="skills-grid-section">
+        <div class="skills-grid-section" style="margin-top: 0;">
             <h2 class="section-title">
                 <span class="icon">🎯</span>
                 全部 Skills
@@ -1456,7 +1444,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                 document.getElementById('cliBadge').textContent = data.cli_client || 'AI CLI';
                 updateStats();
-                renderTopSkills();
                 renderSkills(filteredSkills);
             } catch (error) {
                 showToast('加载失败', 'error');
@@ -1517,38 +1504,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 'xlsx': '📊'
             };
             return emojis[name] || '📦';
-        }
-
-        function renderTopSkills() {
-            const container = document.getElementById('topSkillsList');
-            const topSkills = allSkills.slice(0, 5);
-
-            if (topSkills.length === 0) {
-                container.innerHTML = '<div class="empty-state" style="padding: 40px;">暂无 Skills</div>';
-                return;
-            }
-
-            container.innerHTML = topSkills.map((skill, index) => `
-                <div class="top-skill-item" onclick="showDetail('${skill.id}')">
-                    <div class="top-skill-rank ${index < 3 ? 'top3' : ''}">${index + 1}</div>
-                    <div class="top-skill-icon">${getSkillEmoji(skill.id)}</div>
-                    <div class="top-skill-info">
-                        <div class="top-skill-name">${escapeHtml(skill.name)}</div>
-                        <div class="top-skill-desc">${escapeHtml(skill.description || '暂无描述')}</div>
-                    </div>
-                    <div class="top-skill-tags">
-                        ${skill.source?.type !== 'local' ? `<span class="top-skill-tag">${skill.source?.type || 'local'}</span>` : ''}
-                        ${skill.has_scripts ? '<span class="top-skill-tag">📜 scripts</span>' : ''}
-                    </div>
-                    <div class="top-skill-meta">
-                        <span>${formatSize(skill.size || 0)}</span>
-                    </div>
-                    <div class="top-skill-actions" onclick="event.stopPropagation()">
-                        <button class="btn btn-primary" onclick="showDetail('${skill.id}')">查看</button>
-                        <button class="btn btn-share" onclick="event.stopPropagation(); showShareModal('${skill.id}')">分享</button>
-                    </div>
-                </div>
-            `).join('');
         }
 
         function renderSkills(skills) {
@@ -1924,13 +1879,72 @@ def open_browser(url, delay=1.0):
     Timer(delay, _open).start()
 
 
+def format_size_cli(size_bytes):
+    """Format size for CLI output."""
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f}KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f}MB"
+
+
+def print_skills_table(skills, cli_client):
+    """Print skills in a formatted table for CLI mode."""
+    if not skills:
+        print("\n📦 No skills found.")
+        return
+
+    print(f"\n🎯 {cli_client} - Installed Skills ({len(skills)} total)\n")
+    print("-" * 100)
+    print(f"{'Name':<20} {'Version':<10} {'Source':<12} {'Size':<8} {'Description'}")
+    print("-" * 100)
+
+    for skill in skills:
+        name = skill.get('name', skill['id'])[:18]
+        version = (skill.get('version') or 'N/A')[:8]
+        source_type = (skill.get('source', {}).get('type') or 'local')[:10]
+        size = format_size_cli(skill.get('size', 0))
+        desc = (skill.get('description') or 'No description')[:40]
+
+        print(f"{name:<20} {version:<10} {source_type:<12} {size:<8} {desc}")
+
+    print("-" * 100)
+
+    # Print source details section
+    git_skills = [s for s in skills if s.get('source', {}).get('type') not in (None, 'local')]
+    if git_skills:
+        print("\n📋 Git Repository Sources:\n")
+        for skill in git_skills:
+            source = skill.get('source', {})
+            url = source.get('url') or source.get('remote') or 'N/A'
+            author = source.get('author') or 'Unknown'
+            print(f"  • {skill.get('name', skill['id'])}")
+            print(f"    URL: {url}")
+            print(f"    Author: {author}")
+            if source.get('install_date'):
+                print(f"    Installed: {source['install_date']}")
+            print()
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: server.py <skills_dir> [cli_client]")
+    # Check for CLI mode flags
+    cli_mode = False
+    args = sys.argv[1:]
+
+    if '--cli' in args or '--list' in args or '-l' in args:
+        cli_mode = True
+        # Remove the flag from args
+        args = [a for a in args if a not in ('--cli', '--list', '-l')]
+
+    if len(args) < 1:
+        print("Usage: server.py <skills_dir> [cli_client] [--cli|--list|-l]")
+        print("\nOptions:")
+        print("  --cli, --list, -l    Display skills in terminal (no web server)")
         sys.exit(1)
 
-    skills_dir = sys.argv[1]
-    cli_client = sys.argv[2] if len(sys.argv) > 2 else "unknown"
+    skills_dir = args[0]
+    cli_client = args[1] if len(args) > 1 else "unknown"
 
     # Verify skills directory exists
     if not os.path.exists(skills_dir):
@@ -1939,8 +1953,14 @@ def main():
 
     # Create skill manager
     skill_manager = SkillManager(skills_dir, cli_client)
+    skills = skill_manager.scan_skills()
 
-    # Find available port
+    if cli_mode:
+        # CLI mode: print skills table and exit
+        print_skills_table(skills, cli_client)
+        sys.exit(0)
+
+    # Web mode: start HTTP server
     port = find_available_port()
 
     # Set up request handler
