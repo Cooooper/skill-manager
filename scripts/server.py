@@ -482,6 +482,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             line-height: 1.8;
         }
 
+        .hero-card-stats {
+            display: flex;
+            gap: 24px;
+            margin-top: 8px;
+        }
+
+        .hero-card-stat {
+            text-align: center;
+        }
+
+        .hero-card-stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .hero-card-stat-label {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-top: 4px;
+        }
+
         /* Main Container */
         .main-container {
             max-width: 1200px;
@@ -1274,23 +1296,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="hero-text">
                 <h1>装上这个 <span>Skill</span><br>解锁 AI 超能力</h1>
                 <p class="hero-subtitle">本地 AI Skills 管理平台，轻松查看、管理和分享你的 AI 技能库</p>
-                <div class="hero-stats">
-                    <div class="hero-stat">
-                        <div class="hero-stat-value" id="heroTotalSkills">-</div>
-                        <div class="hero-stat-label">已安装 Skills</div>
-                    </div>
-                    <div class="hero-stat">
-                        <div class="hero-stat-value" id="heroTotalSize">-</div>
-                        <div class="hero-stat-label">总占用空间</div>
-                    </div>
-                </div>
             </div>
             <div class="hero-card">
                 <div class="hero-card-title">🤖 <span id="cliBadge">Loading...</span></div>
-                <div class="hero-card-content">
-                    自动检测本地 AI CLI 环境<br>
-                    支持 Claude Code、Gemini CLI 等<br>
-                    一键管理所有 Skills
+                <div class="hero-card-stats">
+                    <div class="hero-card-stat">
+                        <div class="hero-card-stat-value" id="heroTotalSkills">-</div>
+                        <div class="hero-card-stat-label">已安装 Skills</div>
+                    </div>
+                    <div class="hero-card-stat">
+                        <div class="hero-card-stat-value" id="heroTotalSize">-</div>
+                        <div class="hero-card-stat-label">总占用空间</div>
+                    </div>
                 </div>
             </div>
         </div>
