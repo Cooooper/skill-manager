@@ -13,7 +13,10 @@
       "Bash(python3:*)",
       "Bash(git add:*)",
       "Bash(git push:*)",
-      "Skill(gstack)"
+      "Skill(gstack)",
+      "Bash(git commit:*)",
+      "Bash(git pull:*)",
+      "Bash(find:*)"
     ]
   }
 }

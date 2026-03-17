@@ -861,6 +861,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             padding: 60px 0 80px;
             position: relative;
             overflow: hidden;
+            z-index: 10;
         }
 
         .hero::before {
@@ -883,7 +884,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             justify-content: space-between;
             gap: 60px;
             position: relative;
-            z-index: 1;
+            z-index: 10;
         }
 
         .hero-text {
@@ -936,6 +937,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 16px;
             padding: 24px;
             border: 1px solid rgba(255,255,255,0.2);
+            overflow: visible;
         }
 
         .hero-card-title {
@@ -1135,7 +1137,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 12px;
             box-shadow: var(--shadow-lg);
             min-width: 220px;
-            z-index: 1000;
+            z-index: 9999;
             display: none;
             overflow: hidden;
         }
@@ -1161,6 +1163,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             cursor: pointer;
             transition: all 0.2s;
             border-bottom: 1px solid #f5f5f5;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .client-option:last-child {
@@ -2134,7 +2138,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="hero-card">
                 <div class="hero-card-title">
                     <div class="client-switcher">
-                        <button class="client-switcher-btn" onclick="toggleClientSwitcher()">
+                        <button class="client-switcher-btn" onclick="toggleClientSwitcher(event)">
                             <span id="cliBadge">Loading...</span>
                             <span>▼</span>
                         </button>
@@ -2405,7 +2409,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (!container) return;
 
             container.innerHTML = allClients.map(client => `
-                <div class="client-option ${client.id === currentClientId ? 'active' : ''}" onclick="switchClient('${client.id}')">
+                <div class="client-option ${client.id === currentClientId ? 'active' : ''}" onclick="switchClient('${client.id}', event)">
                     <div class="client-option-icon">${getClientIcon(client.id)}</div>
                     <div class="client-option-info">
                         <div class="client-option-name">${escapeHtml(client.name)}</div>
@@ -2426,12 +2430,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return icons[clientId] || '🤖';
         }
 
-        function toggleClientSwitcher() {
+        function toggleClientSwitcher(event) {
+            if (event) event.stopPropagation();
             const dropdown = document.getElementById('clientSwitcherDropdown');
             dropdown.classList.toggle('active');
         }
 
-        async function switchClient(clientId) {
+        async function switchClient(clientId, event) {
+            if (event) event.stopPropagation();
             const client = allClients.find(c => c.id === clientId);
             if (!client) return;
 
