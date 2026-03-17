@@ -1970,13 +1970,12 @@ def main():
     server = HTTPServer(("127.0.0.1", port), RequestHandler)
 
     url = f"http://127.0.0.1:{port}"
-    print(f"\n🎯 Skill Manager running at: {url}")
-    print(f"   CLI Client: {cli_client}")
-    print(f"   Skills Directory: {skills_dir}")
-    print("\nPress Ctrl+C to stop the server\n")
 
     # Open browser
     open_browser(url)
+
+    # Minimal output in web mode
+    print(f"\n🎯 Skill Manager: {url}")
 
     try:
         server.serve_forever()
