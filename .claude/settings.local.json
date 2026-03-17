@@ -26,7 +26,11 @@
       "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B goto http://127.0.0.1:8765\nsleep 2\n$B click @e1\nsleep 1\n$B screenshot /tmp/test-dropdown.png\nopen /tmp/test-dropdown.png)",
       "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B goto http://127.0.0.1:8765\nsleep 2\n$B snapshot -i | head -5)",
       "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B click @e1\nsleep 1\n$B screenshot /tmp/dropdown-test.png\nopen /tmp/dropdown-test.png)",
-      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B js \"document.querySelectorAll\\('.client-option'\\)[0].click\\(\\)\"\nsleep 3\n$B screenshot /tmp/switch-test.png)"
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B js \"document.querySelectorAll\\('.client-option'\\)[0].click\\(\\)\"\nsleep 3\n$B screenshot /tmp/switch-test.png)",
+      "Bash(ssh-add -l)",
+      "Bash(ssh-add:*)",
+      "Bash(ssh:*)",
+      "Bash(git remote:*)"
     ]
   }
 }
