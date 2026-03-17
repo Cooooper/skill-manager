@@ -16,7 +16,17 @@
       "Skill(gstack)",
       "Bash(git commit:*)",
       "Bash(git pull:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B goto http://127.0.0.1:8765\nsleep 2\n$B screenshot /tmp/current-state.png\nopen /tmp/current-state.png)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B goto http://127.0.0.1:8765\nsleep 2\n$B screenshot /tmp/test1.png)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B snapshot -i | head -5)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B click @e1\nsleep 1\n$B js \"document.querySelectorAll\\('.client-option'\\)[0].click\\(\\)\"\nsleep 3\n$B screenshot /tmp/test2.png)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B snapshot -i | head -3)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B click @e1\nsleep 1\n$B js \"document.querySelectorAll\\('.client-option'\\)[2].click\\(\\)\"\nsleep 3\n$B screenshot /tmp/test3.png)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B goto http://127.0.0.1:8765\nsleep 2\n$B click @e1\nsleep 1\n$B screenshot /tmp/test-dropdown.png\nopen /tmp/test-dropdown.png)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B goto http://127.0.0.1:8765\nsleep 2\n$B snapshot -i | head -5)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B click @e1\nsleep 1\n$B screenshot /tmp/dropdown-test.png\nopen /tmp/dropdown-test.png)",
+      "Bash(B=/Users/hanyahui/.claude/skills/gstack/browse/dist/browse\n$B js \"document.querySelectorAll\\('.client-option'\\)[0].click\\(\\)\"\nsleep 3\n$B screenshot /tmp/switch-test.png)"
     ]
   }
 }
