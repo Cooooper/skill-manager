@@ -501,7 +501,14 @@ class SkillManager:
         try:
             # Check if there are uncommitted changes (ignore untracked files)
             result = subprocess.run(
-                ["git", "-C", str(skill_path), "status", "--porcelain", "--untracked-files=no"],
+                [
+                    "git",
+                    "-C",
+                    str(skill_path),
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=no",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -777,7 +784,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             # Update the skill manager with new skills directory
             home = Path.home()
-            new_skills_dir = home / AI_CLIENTS[client_id]["skills_dir"]
+            skills_dir = AI_CLIENTS[client_id]["skills_dir"]
+            if skills_dir.startswith("~/"):
+                skills_dir = str(home / skills_dir[2:])
+            new_skills_dir = Path(skills_dir)
             new_cli_client = AI_CLIENTS[client_id]["name"]
 
             if not new_skills_dir.exists():
@@ -860,8 +870,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             color: white;
             padding: 60px 0 80px;
             position: relative;
-            overflow: hidden;
-            z-index: 10;
+            overflow: visible;
         }
 
         .hero::before {
@@ -884,7 +893,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             justify-content: space-between;
             gap: 60px;
             position: relative;
-            z-index: 10;
         }
 
         .hero-text {
@@ -983,7 +991,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin: -40px auto 60px;
             padding: 0 24px;
             position: relative;
-            z-index: 2;
+            z-index: 20;
         }
 
         /* Search & Filter Section */
@@ -2132,7 +2140,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <section class="hero">
         <div class="hero-content">
             <div class="hero-text">
-                <h1>装上这个 <span>Skill</span><br>解锁 AI 超能力</h1>
+                <h1>装上这个 <span>Skill</span><br>管理你的 Skills</h1>
                 <p class="hero-subtitle">本地 AI Skills 管理平台，轻松查看、管理和分享你的 AI 技能库</p>
             </div>
             <div class="hero-card">
@@ -2143,7 +2151,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <span>▼</span>
                         </button>
                         <div class="client-switcher-dropdown" id="clientSwitcherDropdown">
-                            <div class="client-switcher-header">选择 AI Client</div>
+                            <div class="client-switcher-header">选择你本地安装的 AI Client</div>
                             <div id="clientOptions">
                                 <!-- Dynamic content -->
                             </div>
